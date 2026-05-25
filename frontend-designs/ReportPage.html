@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Research Evaluation Report — ARC</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,300&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #F7F5F0;
+    --ink: #0E0E0C;
+    --ink-muted: #6B6860;
+    --ink-faint: #C4C2BC;
+    --amber: #B8935A;
+    --amber-light: #F0E6D3;
+    --amber-pale: #FAF5EC;
+    --border: #E2DFD8;
+    --white: #FFFFFF;
+    --green: #3A7D5C;
+    --green-pale: #EDF5F0;
+    --red: #C0503A;
+    --red-pale: #FAF0EE;
+    --chaos: #2C3E6B;
+    --chaos-pale: #EEF0F8;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    font-family: 'Instrument Sans', sans-serif;
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .dot-grid {
+    position: fixed; inset: 0;
+    background-image: radial-gradient(circle, rgba(14,14,12,0.07) 1px, transparent 1px);
+    background-size: 28px 28px;
+    pointer-events: none; z-index: 0;
+  }
+
+  /* ── Topbar ── */
+  .topbar {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(247,245,240,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 48px; height: 60px;
+  }
+
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-mark {
+    width: 26px; height: 26px; border: 1.5px solid var(--amber);
+    border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  }
+  .logo-mark::before { content: ''; width: 9px; height: 9px; background: var(--amber); border-radius: 2px; }
+  .logo-text { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+
+  .chip {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    background: var(--white); border: 1px solid var(--border);
+    padding: 5px 12px; border-radius: 20px; color: var(--ink-muted);
+    text-transform: uppercase;
+  }
+
+  .download-btn {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--ink); color: white;
+    border: none; border-radius: 8px;
+    padding: 9px 18px;
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .download-btn:hover { background: var(--amber); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(14,14,12,0.15); }
+
+  /* ── Page ── */
+  .page {
+    position: relative; z-index: 1;
+    max-width: 900px; margin: 0 auto;
+    padding: 52px 48px 100px;
+  }
+
+  /* ── Report header ── */
+  .report-header {
+    margin-bottom: 52px;
+    opacity: 0; transform: translateY(12px);
+    animation: fadeUp 0.6s ease 0.1s forwards;
+  }
+
+  .report-eyebrow {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
+  }
+  .eyebrow-line { width: 24px; height: 1px; background: var(--amber); }
+  .eyebrow-text { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--amber); }
+
+  .report-title {
+    font-family: 'Fraunces', serif;
+    font-size: clamp(28px, 4vw, 42px);
+    font-weight: 300; line-height: 1.15;
+    letter-spacing: -0.02em; color: var(--ink);
+    margin-bottom: 16px;
+  }
+  .report-title em { font-style: italic; color: var(--amber); }
+
+  .report-meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .meta-item {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--ink-muted);
+  }
+  .meta-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--ink-faint); }
+
+  .confidence-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--green-pale); border: 1px solid rgba(58,125,92,0.25);
+    color: var(--green); padding: 5px 12px; border-radius: 20px;
+    font-size: 12px; font-weight: 600;
+  }
+
+  /* ── Section ── */
+  .section {
+    margin-bottom: 52px;
+    opacity: 0; transform: translateY(12px);
+    animation: fadeUp 0.6s ease forwards;
+  }
+
+  .section-header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-num {
+    font-family: 'Fraunces', serif;
+    font-size: 13px; color: var(--amber); font-weight: 400;
+  }
+
+  .section-title {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--ink);
+  }
+
+  /* ── Executive Summary ── */
+  .exec-summary {
+    font-size: 16px; line-height: 1.75; color: var(--ink-muted);
+    background: var(--white); border: 1px solid var(--border);
+    border-left: 3px solid var(--amber);
+    border-radius: 0 10px 10px 0;
+    padding: 20px 24px;
+  }
+  .exec-summary strong { color: var(--ink); font-weight: 600; }
+
+  /* ── Charts grid ── */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .chart-card {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px;
+    transition: box-shadow 0.2s ease;
+  }
+  .chart-card:hover { box-shadow: 0 4px 20px rgba(14,14,12,0.07); }
+
+  .chart-card.full { grid-column: 1 / -1; }
+
+  .chart-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-faint);
+    margin-bottom: 12px;
+  }
+
+  .chart-container { width: 100%; }
+
+  /* Gauge row */
+  .gauges-row {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+  }
+
+  .gauge-card {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 12px; text-align: center;
+    transition: all 0.2s ease;
+  }
+  .gauge-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(14,14,12,0.08); }
+
+  /* ── Strengths / Weaknesses ── */
+  .sw-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  .sw-card {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px;
+  }
+
+  .sw-card.strengths { border-top: 3px solid var(--green); }
+  .sw-card.weaknesses { border-top: 3px solid var(--red); }
+
+  .sw-title {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; margin-bottom: 14px;
+  }
+  .sw-card.strengths .sw-title { color: var(--green); }
+  .sw-card.weaknesses .sw-title { color: var(--red); }
+
+  .sw-item {
+    display: flex; gap: 10px; align-items: flex-start;
+    margin-bottom: 10px; font-size: 13px; line-height: 1.5; color: var(--ink-muted);
+  }
+  .sw-icon { flex-shrink: 0; font-size: 12px; margin-top: 1px; }
+
+  /* ── Chaos callout ── */
+  .chaos-callout {
+    background: var(--chaos-pale);
+    border: 1.5px solid #8B9BC4;
+    border-radius: 12px; padding: 20px 24px;
+    position: relative; overflow: hidden;
+  }
+  .chaos-callout::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--chaos), #8B9BC4, var(--chaos));
+  }
+  .chaos-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .chaos-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    background: var(--chaos); color: white; padding: 3px 8px; border-radius: 4px;
+  }
+  .chaos-constraint {
+    font-size: 14px; font-weight: 600; color: var(--chaos);
+    margin-bottom: 10px; font-style: italic;
+  }
+  .chaos-response { font-size: 13px; color: var(--ink-muted); line-height: 1.6; }
+
+  /* ── Methodology ── */
+  .methodology-steps {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .method-step {
+    display: flex; gap: 14px; align-items: flex-start;
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+    transition: all 0.2s ease;
+  }
+  .method-step:hover { border-color: var(--amber-light); background: var(--amber-pale); }
+  .step-num {
+    font-family: 'Fraunces', serif;
+    font-size: 20px; font-weight: 400; color: var(--amber);
+    line-height: 1; flex-shrink: 0; width: 28px;
+  }
+  .step-body { flex: 1; }
+  .step-title { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 3px; }
+  .step-desc { font-size: 12px; color: var(--ink-muted); line-height: 1.5; }
+
+  /* ── References ── */
+  .references-list { display: flex; flex-direction: column; gap: 8px; }
+  .ref-item {
+    display: flex; gap: 12px;
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 16px;
+    font-size: 12px; color: var(--ink-muted); line-height: 1.5;
+  }
+  .ref-num {
+    font-family: 'Fraunces', serif; font-size: 14px;
+    color: var(--amber); flex-shrink: 0; width: 20px;
+  }
+
+  /* ── Animations ── */
+  @keyframes fadeUp { to { opacity: 1; transform: translateY(0); } }
+
+  /* Staggered sections */
+  .section:nth-child(1) { animation-delay: 0.15s; }
+  .section:nth-child(2) { animation-delay: 0.22s; }
+  .section:nth-child(3) { animation-delay: 0.28s; }
+  .section:nth-child(4) { animation-delay: 0.34s; }
+  .section:nth-child(5) { animation-delay: 0.4s; }
+  .section:nth-child(6) { animation-delay: 0.46s; }
+  .section:nth-child(7) { animation-delay: 0.52s; }
+
+  /* Responsive */
+  @media (max-width: 700px) {
+    .page { padding: 32px 20px 80px; }
+    .topbar { padding: 0 20px; }
+    .charts-grid, .sw-grid, .gauges-row { grid-template-columns: 1fr; }
+    .charts-grid .chart-card.full { grid-column: 1; }
+  }
+</style>
+</head>
+<body>
+<div class="dot-grid"></div>
+
+<!-- Topbar -->
+<nav class="topbar">
+  <div class="logo">
+    <div class="logo-mark"></div>
+    <span class="logo-text">Research Council</span>
+  </div>
+  <div class="topbar-right">
+    <span class="chip">Session #A3F8</span>
+    <span class="chip">Mode 2 — Hypothesis</span>
+    <button class="download-btn" onclick="window.print()">
+      ↓ Download PDF
+    </button>
+  </div>
+</nav>
+
+<main class="page">
+
+  <!-- Report Header -->
+  <div class="report-header">
+    <div class="report-eyebrow">
+      <div class="eyebrow-line"></div>
+      <span class="eyebrow-text">Research Evaluation Report</span>
+    </div>
+    <h1 class="report-title">
+      Federated Learning for <em>Privacy-Preserving</em><br/>
+      Clinical Machine Learning
+    </h1>
+    <div class="report-meta">
+      <div class="meta-item">📅 10 March 2026</div>
+      <div class="meta-dot"></div>
+      <div class="meta-item">18 papers reviewed</div>
+      <div class="meta-dot"></div>
+      <div class="meta-item">5 debate rounds</div>
+      <div class="meta-dot"></div>
+      <div class="confidence-badge">✓ High Confidence · RAGAS 0.86</div>
+    </div>
+  </div>
+
+  <!-- 1. Executive Summary -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">01</span>
+      <span class="section-title">Executive Summary</span>
+    </div>
+    <div class="exec-summary">
+      Federated learning with <strong>differential privacy (ε=1.0, δ=1e-5)</strong> can substantially reduce re-identification risk in multi-hospital ML pipelines, while retaining model accuracy within acceptable margins of centralised baselines. The proposed methodology employs <strong>personalized federated learning (pFedMe)</strong> to address non-IID data distributions across hospital sites, and <strong>FedProx (μ=0.01)</strong> with noise-aware loss weighting to counter 35% label noise introduced by inconsistent annotation protocols. Validation is proposed on <strong>MIMIC-III</strong> with synthetic noise injection across three benchmark tasks.
+    </div>
+  </div>
+
+  <!-- 2. Idea Evaluation -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">02</span>
+      <span class="section-title">Idea Evaluation</span>
+    </div>
+
+    <!-- Gauges Row -->
+    <div class="gauges-row" style="margin-bottom:16px;" id="gauges-row"></div>
+
+    <!-- Radar + Literature charts -->
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-label">Research Profile — Radar</div>
+        <div class="chart-container" id="radar-chart" style="height:280px;"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-label">Literature Relevance — Top Papers</div>
+        <div class="chart-container" id="bar-chart" style="height:280px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Strengths & Weaknesses -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">03</span>
+      <span class="section-title">Strengths & Weaknesses</span>
+    </div>
+    <div class="sw-grid">
+      <div class="sw-card strengths">
+        <div class="sw-title">✓ Strengths</div>
+        <div class="sw-item"><span class="sw-icon">→</span> pFedMe directly addresses the non-IID distribution problem across heterogeneous hospital datasets, with strong prior empirical support.</div>
+        <div class="sw-item"><span class="sw-icon">→</span> Differential privacy budget is explicitly defined (ε=1.0, δ=1e-5), making the privacy claim falsifiable and auditable by regulators.</div>
+        <div class="sw-item"><span class="sw-icon">→</span> FedProx with noise-aware loss weighting is a proven robust aggregation strategy for noisy federated environments.</div>
+        <div class="sw-item"><span class="sw-icon">→</span> MIMIC-III is a widely accepted clinical benchmark, ensuring comparability with prior literature.</div>
+      </div>
+      <div class="sw-card weaknesses">
+        <div class="sw-title">✗ Weaknesses & Risks</div>
+        <div class="sw-item"><span class="sw-icon">→</span> No proposed mechanism for hyperparameter tuning across federated nodes without central coordination — requires further design.</div>
+        <div class="sw-item"><span class="sw-icon">→</span> Privacy-accuracy tradeoff at ε=1.0 may be insufficient for highly sensitive clinical sub-tasks — sensitivity analysis needed.</div>
+        <div class="sw-item"><span class="sw-icon">→</span> 35% label noise assumption may not generalise across all hospital annotation workflows — scope should be stated explicitly.</div>
+        <div class="sw-item"><span class="sw-icon">→</span> Communication overhead of federated rounds is not addressed — critical for real-world hospital network constraints.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Chaos Constraint -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">04</span>
+      <span class="section-title">Chaos Protocol Response</span>
+    </div>
+    <div class="chaos-callout">
+      <div class="chaos-header">
+        <span class="chaos-badge">⚡ Injected Constraint</span>
+      </div>
+      <div class="chaos-constraint">"Assume the primary training dataset has 35% label noise due to inconsistent annotation protocols across hospital sites."</div>
+      <div class="chaos-response">
+        <strong style="color:var(--chaos)">Council response:</strong> The methodology was revised to incorporate FedProx (μ=0.01) with noise-aware loss weighting as the primary aggregation strategy. Additionally, a noise estimation pre-training phase on each local node is proposed before federation begins. The methodology is assessed as <strong>robust</strong> to this constraint — the core privacy-preserving claims remain valid under noisy conditions.
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Proposed Methodology -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">05</span>
+      <span class="section-title">Proposed Methodology</span>
+    </div>
+    <div class="methodology-steps">
+      <div class="method-step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Dataset Preparation & Noise Characterisation</div>
+          <div class="step-desc">Partition MIMIC-III across 5 simulated hospital nodes. Inject synthetic label noise (15–40% range) per node. Estimate per-node noise rate using pre-training on a small clean validation set.</div>
+        </div>
+      </div>
+      <div class="method-step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Federated Training with Differential Privacy</div>
+          <div class="step-desc">Apply pFedMe with personalised local models per node to handle non-IID distributions. Add Gaussian noise mechanism (ε=1.0, δ=1e-5) to gradients before aggregation.</div>
+        </div>
+      </div>
+      <div class="method-step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Robust Aggregation via FedProx</div>
+          <div class="step-desc">Use FedProx (μ=0.01) with noise-aware loss weighting to down-weight high-noise nodes during global model aggregation. Validate convergence across 100 federation rounds.</div>
+        </div>
+      </div>
+      <div class="method-step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Privacy-Accuracy Tradeoff Analysis</div>
+          <div class="step-desc">Sweep ε ∈ {0.1, 0.5, 1.0, 5.0} to characterise the privacy-accuracy frontier. Report AUC, F1, and re-identification risk score for each configuration.</div>
+        </div>
+      </div>
+      <div class="method-step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <div class="step-title">Benchmark Comparison & Reporting</div>
+          <div class="step-desc">Compare against centralised baseline, vanilla FedAvg, and DP-FedAvg on 3 MIMIC-III tasks. Report with 95% CI over 5 random seeds. Target venues: NeurIPS, ICLR ML4Health workshop.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. Methodology Flowchart -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">06</span>
+      <span class="section-title">Research Flow</span>
+    </div>
+    <div class="chart-card full" style="padding:24px;">
+      <div class="chart-label">End-to-End Methodology — Flow Diagram</div>
+      <div id="flow-chart" style="height:220px; width:100%;"></div>
+    </div>
+  </div>
+
+  <!-- 7. References -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">07</span>
+      <span class="section-title">Key References</span>
+    </div>
+    <div class="references-list">
+      <div class="ref-item"><div class="ref-num">1</div><div>McMahan et al. (2017). Communication-Efficient Learning of Deep Networks from Decentralized Data. <em>AISTATS 2017</em>. arXiv:1602.05629</div></div>
+      <div class="ref-item"><div class="ref-num">2</div><div>Li et al. (2020). Federated Optimization in Heterogeneous Networks (FedProx). <em>MLSys 2020</em>. arXiv:1812.06127</div></div>
+      <div class="ref-item"><div class="ref-num">3</div><div>Dwork & Roth (2014). The Algorithmic Foundations of Differential Privacy. <em>Foundations and Trends in Theoretical Computer Science</em>.</div></div>
+      <div class="ref-item"><div class="ref-num">4</div><div>Dinh et al. (2020). Personalized Federated Learning with Moreau Envelopes (pFedMe). <em>NeurIPS 2020</em>. arXiv:2006.08848</div></div>
+      <div class="ref-item"><div class="ref-num">5</div><div>Johnson et al. (2016). MIMIC-III, a freely accessible critical care database. <em>Scientific Data, 3</em>, 160035.</div></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── DATA ────────────────────────────────────────────────────────────────────
+const scores = {
+  novelty: 78,
+  feasibility: 82,
+  researchGap: 85,
+  citationSupport: 86,
+  overall: 83
+};
+
+const papers = [
+  { name: "McMahan et al. (2017) — FedAvg", score: 96 },
+  { name: "Li et al. (2020) — FedProx", score: 93 },
+  { name: "Dwork & Roth (2014) — DP", score: 88 },
+  { name: "Dinh et al. (2020) — pFedMe", score: 87 },
+  { name: "Johnson et al. (2016) — MIMIC-III", score: 84 },
+];
+
+// ── GAUGES ──────────────────────────────────────────────────────────────────
+const gaugeData = [
+  { label: "Novelty",          value: scores.novelty,          color: "#B8935A" },
+  { label: "Feasibility",      value: scores.feasibility,      color: "#3A7D5C" },
+  { label: "Research Gap",     value: scores.researchGap,      color: "#2C3E6B" },
+  { label: "Citation Support", value: scores.citationSupport,  color: "#7A5C8A" },
+];
+
+const gaugesRow = document.getElementById("gauges-row");
+gaugeData.forEach(g => {
+  const card = document.createElement("div");
+  card.className = "gauge-card";
+  card.innerHTML = `<div id="gauge-${g.label.replace(/\s/g,'-')}" style="height:120px;width:100%;"></div>
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink-faint);margin-top:4px;">${g.label}</div>`;
+  gaugesRow.appendChild(card);
+
+  setTimeout(() => {
+    const chart = echarts.init(document.getElementById(`gauge-${g.label.replace(/\s/g,'-')}`));
+    chart.setOption({
+      animation: true, animationDuration: 1200, animationEasing: "cubicOut",
+      series: [{
+        type: "gauge",
+        startAngle: 200, endAngle: -20,
+        min: 0, max: 100,
+        radius: "88%",
+        pointer: { show: false },
+        progress: {
+          show: true, roundCap: true, width: 10,
+          itemStyle: { color: g.color }
+        },
+        axisLine: { lineStyle: { width: 10, color: [[1, "#F0EDE8"]] } },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        axisLabel: { show: false },
+        detail: {
+          valueAnimation: true,
+          formatter: "{value}",
+          fontSize: 22, fontFamily: "Fraunces, serif",
+          fontWeight: 400, color: g.color,
+          offsetCenter: [0, "10%"]
+        },
+        data: [{ value: g.value }]
+      }]
+    });
+  }, 100);
+});
+
+// ── RADAR ────────────────────────────────────────────────────────────────────
+setTimeout(() => {
+  const radar = echarts.init(document.getElementById("radar-chart"));
+  radar.setOption({
+    animation: true, animationDuration: 1400, animationEasing: "cubicOut",
+    tooltip: { trigger: "item" },
+    radar: {
+      indicator: [
+        { name: "Novelty", max: 100 },
+        { name: "Feasibility", max: 100 },
+        { name: "Research Gap", max: 100 },
+        { name: "Citation Support", max: 100 },
+        { name: "Overall", max: 100 },
+      ],
+      shape: "polygon",
+      radius: "65%",
+      center: ["50%", "52%"],
+      axisName: { color: "#6B6860", fontSize: 11, fontFamily: "Instrument Sans, sans-serif", fontWeight: 600 },
+      splitLine: { lineStyle: { color: "#E2DFD8" } },
+      splitArea: { show: true, areaStyle: { color: ["#FDFCFA", "#F7F5F0"] } },
+      axisLine: { lineStyle: { color: "#E2DFD8" } },
+    },
+    series: [{
+      type: "radar",
+      data: [{
+        value: [scores.novelty, scores.feasibility, scores.researchGap, scores.citationSupport, scores.overall],
+        name: "Research Profile",
+        symbol: "circle", symbolSize: 5,
+        areaStyle: { color: "rgba(184,147,90,0.15)" },
+        lineStyle: { color: "#B8935A", width: 2 },
+        itemStyle: { color: "#B8935A" }
+      }]
+    }]
+  });
+}, 200);
+
+// ── BAR CHART ────────────────────────────────────────────────────────────────
+setTimeout(() => {
+  const bar = echarts.init(document.getElementById("bar-chart"));
+  bar.setOption({
+    animation: true, animationDuration: 1200, animationEasing: "cubicOut",
+    grid: { top: 10, bottom: 20, left: 16, right: 60, containLabel: true },
+    tooltip: {
+      trigger: "axis", axisPointer: { type: "shadow" },
+      formatter: p => `${p[0].name}<br/>Relevance: <b>${p[0].value}</b>`
+    },
+    xAxis: {
+      type: "value", max: 100,
+      axisLabel: { fontSize: 10, color: "#C4C2BC" },
+      splitLine: { lineStyle: { color: "#F0EDE8" } },
+      axisLine: { show: false }, axisTick: { show: false }
+    },
+    yAxis: {
+      type: "category",
+      data: papers.map(p => p.name.split(" — ")[0]),
+      axisLabel: { fontSize: 11, color: "#6B6860", fontFamily: "Instrument Sans, sans-serif" },
+      axisLine: { show: false }, axisTick: { show: false }
+    },
+    series: [{
+      type: "bar", barMaxWidth: 20, barBorderRadius: [0, 6, 6, 0],
+      data: papers.map((p, i) => ({
+        value: p.score,
+        itemStyle: {
+          color: {
+            type: "linear", x: 0, y: 0, x2: 1, y2: 0,
+            colorStops: [
+              { offset: 0, color: i === 0 ? "#B8935A" : i === 1 ? "#3A7D5C" : "#8B9BC4" },
+              { offset: 1, color: i === 0 ? "#D4B07A" : i === 1 ? "#5A9D7C" : "#AABBD4" }
+            ]
+          }
+        }
+      })),
+      label: {
+        show: true, position: "right",
+        fontSize: 11, fontWeight: 700,
+        color: "#6B6860",
+        formatter: "{c}"
+      }
+    }]
+  });
+}, 300);
+
+// ── FLOW CHART ────────────────────────────────────────────────────────────────
+setTimeout(() => {
+  const flow = echarts.init(document.getElementById("flow-chart"));
+  const nodes = [
+    { name: "Data\nPrep",         x: 60,  y: 110, color: "#B8935A" },
+    { name: "Noise\nEstimation",  x: 200, y: 110, color: "#9A7D4A" },
+    { name: "Federated\nTraining",x: 360, y: 110, color: "#3A7D5C" },
+    { name: "DP\nAggregation",    x: 520, y: 110, color: "#2C3E6B" },
+    { name: "Benchmark\nEval",    x: 680, y: 110, color: "#7A5C8A" },
+  ];
+
+  flow.setOption({
+    animation: true, animationDuration: 1000,
+    tooltip: { show: false },
+    series: [{
+      type: "graph",
+      layout: "none",
+      symbolSize: 60,
+      roam: false,
+      label: {
+        show: true, fontSize: 10, fontFamily: "Instrument Sans, sans-serif",
+        fontWeight: 600, color: "white", lineHeight: 14
+      },
+      edgeSymbol: ["none", "arrow"],
+      edgeSymbolSize: [0, 8],
+      lineStyle: { color: "#E2DFD8", width: 2, curveness: 0 },
+      data: nodes.map(n => ({
+        name: n.name, x: n.x, y: n.y,
+        itemStyle: { color: n.color, borderColor: "white", borderWidth: 2 },
+        symbol: "roundRect",
+        symbolSize: [90, 52],
+        label: { formatter: n.name }
+      })),
+      links: nodes.slice(0, -1).map((n, i) => ({
+        source: n.name, target: nodes[i + 1].name,
+        lineStyle: { color: "#D4C4A8", width: 2 }
+      }))
+    }]
+  });
+}, 400);
+
+// Resize all charts on window resize
+window.addEventListener("resize", () => {
+  ["radar-chart","bar-chart","flow-chart"].forEach(id => {
+    const c = echarts.getInstanceByDom(document.getElementById(id));
+    if (c) c.resize();
+  });
+});
+</script>
+</body>
+</html>
