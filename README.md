@@ -8,12 +8,12 @@ A multi-agent AI system that assembles a council of adversarial agents to debate
 
 You submit a research idea (topic, hypothesis, or partial proposal). ARC:
 
-1. Extracts keywords and formulates a clean hypothesis
-2. Fetches up to 20 real papers from ArXiv and Semantic Scholar
+1. Extracts keywords and formulates a clean hypothesis — which you can review and edit before anything else runs
+2. Fetches candidate papers from arXiv, OpenAlex, Semantic Scholar (and PubMed for biomedical topics), ranks them by similarity to the hypothesis and keeps the best 20 — optionally letting you remove papers or add your own (arXiv ID, DOI or PDF)
 3. Runs a structured 5-round debate between 8 AI agents
-4. Scores the debate quality using a RAGAS faithfulness metric
-5. Retries the debate (up to 2×) if quality is too low
-6. Generates a PDF evaluation report with novelty, feasibility, and confidence scores
+4. Checks every factual claim against the paper abstracts (supported / partial / unsupported / contradicted, with a quote)
+5. Scores faithfulness with a RAGAS-style metric; if it is below 0.7, the Innovator must revise or retract the unverified claims (up to 2 repair rounds)
+6. Produces a report with median scores and their range across independent Chairman passes, a claim-evidence table, the full transcript, and PDF / Markdown / Word / BibTeX exports
 
 ---
 
@@ -21,14 +21,14 @@ You submit a research idea (topic, hypothesis, or partial proposal). ARC:
 
 | Agent | Role |
 |---|---|
-| **Orchestrator** | Parses user input, extracts keywords, frames the hypothesis |
-| **Librarian** | Fetches papers from ArXiv + Semantic Scholar, stores in ChromaDB |
-| **Innovator** | Proposes and defends the research direction (Rounds 1, 3, 4) |
-| **Skeptic** | Attacks the proposal with logical critiques (Rounds 2, 3) |
-| **Fact-Checker** | Audits claims against ChromaDB; flags unsupported assertions |
-| **Chaos Agent** | Injects a random real-world constraint (Round 3) |
-| **Chairman** | Synthesizes all rounds, computes final scores, produces evaluation JSON |
-| **Secretary** | Converts Chairman's JSON into a formatted A4 PDF report |
+| **Orchestrator** | Parses user input, extracts keywords, frames the hypothesis and research domain |
+| **Librarian** | Fetches and reranks papers from arXiv, OpenAlex, Semantic Scholar, PubMed; stores them in ChromaDB |
+| **Innovator** | Proposes and defends the research direction (Rounds 1, 3, 4) and repairs flagged claims |
+| **Skeptic** | Attacks the proposal with logical critiques (Rounds 2, 3); optionally cites counter-evidence |
+| **Fact-Checker** | Gives every Innovator claim an evidence verdict; checks the Skeptic for fabricated facts (every round) |
+| **Chaos Agent** | Injects the most relevant real-world constraint from its pool, or one you chose (Round 3) |
+| **Chairman** | Synthesizes all rounds, scores against an anchored rubric (median of 3 passes), produces the evaluation JSON |
+| **Secretary** | Converts the evaluation JSON into the PDF report and exports |
 
 ---
 
@@ -38,13 +38,15 @@ You submit a research idea (topic, hypothesis, or partial proposal). ARC:
 |---|---|
 | Backend | FastAPI (Python) |
 | Agent Orchestration | LangGraph |
-| LLM | Groq API — `llama-3.3-70b-versatile` |
+| LLM | OpenRouter — default `anthropic/claude-sonnet-5.5` (configurable per agent); Groq `llama-3.3-70b-versatile` optional |
+| Structured output | JSON-schema structured outputs + tolerant parser + repair retry |
 | Vector Database | ChromaDB (session-namespaced) |
 | Embeddings | sentence-transformers `all-MiniLM-L6-v2` (local) |
-| Paper Sources | ArXiv API + Semantic Scholar API |
+| Paper Sources | arXiv, OpenAlex, Semantic Scholar, PubMed |
+| Session store | SQLite (`sessions/arc.db`) — sessions survive restarts |
 | Frontend | Next.js 14 + Apache ECharts |
-| Real-time | Server-Sent Events (SSE) |
-| PDF Generation | ReportLab |
+| Real-time | Server-Sent Events (SSE) with resumable replay |
+| Reports | ReportLab (PDF), python-docx (Word), Markdown, BibTeX |
 
 ---
 
@@ -52,38 +54,32 @@ You submit a research idea (topic, hypothesis, or partial proposal). ARC:
 
 ```
 ├── backend/
-│   ├── agents/          # One file per agent
-│   │   ├── orchestrator.py
-│   │   ├── librarian.py
-│   │   ├── innovator.py
-│   │   ├── skeptic.py
-│   │   ├── fact_checker.py
-│   │   ├── chaos_agent.py
-│   │   ├── chairman.py
-│   ├── graph/
-│   │   └── council_graph.py   # LangGraph StateGraph + retry loop
-│   ├── fetchers/
-│   │   ├── arxiv_fetcher.py
-│   │   └── semantic_scholar.py
-│   ├── rag/
-│   │   ├── chromadb_client.py
-│   │   └── embedder.py
-│   ├── scoring/
-│   │   └── ragas_scorer.py    # RAGAS faithfulness metric
-│   ├── sse/
-│   │   └── event_emitter.py   # Per-session asyncio queues
-│   ├── pdf/
-│   │   └── report_generator.py
+│   ├── agents/               # One file per agent (+ common.py shared helpers)
+│   ├── graph/council_graph.py  # LangGraph StateGraph + repair loop
+│   ├── fetchers/             # arxiv, openalex, semantic_scholar, pubmed, documents (PDF/DOCX text)
+│   ├── rag/                  # chromadb_client.py, embedder.py
 │   ├── llm/
-│   │   └── client.py
-│   └── main.py                # FastAPI app + session endpoints
+│   │   ├── client.py         # providers, structured outputs, retries, fallback, budget, logging
+│   │   ├── json_utils.py     # tolerant JSON extraction
+│   │   ├── schemas.py        # JSON schemas + normalizers for every agent reply
+│   │   ├── usage.py          # per-session cost tracking + JSONL call logs
+│   │   └── mock_provider.py  # offline LLM for tests and UI work
+│   ├── scoring/              # ragas_scorer.py, evaluation.py (builds/normalizes the report JSON)
+│   ├── store/session_store.py  # SQLite sessions
+│   ├── sse/event_emitter.py  # per-subscriber SSE fan-out + replay buffer
+│   ├── pdf/report_generator.py
+│   ├── export/exporters.py   # Markdown, BibTeX, DOCX
+│   ├── config.py             # all ARC_* settings
+│   └── main.py               # FastAPI app + endpoints
 ├── frontend/
+│   ├── lib/api.ts            # backend URL, typed fetch helpers
 │   └── app/
-│       ├── page.tsx                          # Input page
-│       ├── council/[session_id]/page.tsx     # Live debate feed
-│       └── report/[session_id]/page.tsx      # Final report + charts
-├── frontend-designs/          # Original design files (reference)
-├── requirements.txt
+│       ├── page.tsx                      # Input + confirm step + recent sessions
+│       ├── council/[session_id]/page.tsx # Live debate feed + paper review
+│       ├── report/[session_id]/page.tsx  # Report, claim audit, transcript, exports
+│       └── compare/page.tsx              # Two runs side by side
+├── tests/                    # pytest suite (runs offline with the mock LLM)
+├── requirements.txt / requirements-dev.txt
 └── .env.example
 ```
 
@@ -91,36 +87,19 @@ You submit a research idea (topic, hypothesis, or partial proposal). ARC:
 
 ## Setup
 
-### 1. Clone the repo
-
-```bash
-git clone https://github.com/ayushwalunj1101/Autonomous-Research-Council.git
-cd Autonomous-Research-Council
-```
-
-### 2. Backend
+### 1. Backend
 
 ```bash
 pip install -r requirements.txt
-```
-
-Copy `.env.example` to `.env` and fill in your keys:
-
-```env
-GROQ_API_KEY=your_groq_api_key_here
-SEMANTIC_SCHOLAR_API_KEY=your_s2_api_key_here   # optional
-OPENROUTER_API_KEY=your_openrouter_api_key_here  # optional, for final demo
-```
-
-Start the backend:
-
-```bash
+cp .env.example .env      # then add your OPENROUTER_API_KEY
 uvicorn backend.main:app --reload
 ```
 
-API runs at `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`.
+API runs at `http://localhost:8000` (docs at `/docs`). The startup log prints the provider, model and per-session cost limit.
 
-### 3. Frontend
+**Cost:** with Claude Sonnet 5.5 a measured run costs about $0.24 (14 LLM calls, ~2.5 minutes), plus ~$0.11 per repair round; `ARC_SESSION_BUDGET_USD` (default $0.50) hard-stops a session. To cut cost ~35%, set `ARC_SCORING_SAMPLES=1` and `ARC_MODEL_FACT_CHECKER=deepseek/deepseek-v3.2`. For development set `ARC_MODEL=deepseek/deepseek-v3.2` (~$0.005/run) or `ARC_LLM_PROVIDER=mock` (free, offline, deterministic). Every LLM call is logged to `logs/<session_id>.jsonl`.
+
+### 2. Frontend
 
 ```bash
 cd frontend
@@ -128,7 +107,16 @@ npm install
 npm run dev
 ```
 
-Frontend runs at `http://localhost:3000`.
+Frontend runs at `http://localhost:3000`. Set `NEXT_PUBLIC_API_BASE` (see `frontend/.env.example`) if the backend is not on `localhost:8000`.
+
+### 3. Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests -q
+```
+
+The suite runs fully offline (mock LLM, temp ChromaDB/SQLite) and covers the JSON parser (built from real failure logs), the LLM client's retry/fallback/budget logic, the full debate graph including repair rounds, the PDF/exports with hostile text, and every API endpoint including SSE replay.
 
 ---
 
@@ -136,63 +124,59 @@ Frontend runs at `http://localhost:3000`.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/session` | Start a session, returns `session_id` immediately (202) |
-| `GET` | `/api/session/{id}/stream` | SSE stream — live debate events |
-| `GET` | `/api/session/{id}/result` | Final evaluation JSON |
-| `GET` | `/api/session/{id}/pdf` | Download PDF report |
-| `GET` | `/api/health` | Health check |
+| `POST` | `/api/session/prepare` | Runs the Orchestrator; returns `{session_id, hypothesis, keywords, domain}` for review |
+| `POST` | `/api/session/{id}/start` | Starts the debate with edited hypothesis/keywords, `review_papers`, optional `chaos_constraint` (202) |
+| `POST` | `/api/session` | One-shot: prepare + start in the background (202) |
+| `GET` | `/api/session/{id}/stream` | SSE stream; resume with `Last-Event-ID` or `?last_event_id=` |
+| `GET` | `/api/session/{id}/papers` | Current paper set |
+| `POST` | `/api/session/{id}/papers` | Add a paper `{identifier}` (arXiv ID/URL or DOI) during review |
+| `POST` | `/api/session/{id}/papers/upload` | Add a PDF paper during review |
+| `POST` | `/api/session/{id}/papers/confirm` | `{remove_ids}` — finish review and start the debate |
+| `POST` | `/api/session/{id}/cancel` | Stop a queued/running session |
+| `GET` | `/api/session/{id}/result` | Final evaluation JSON (202 with status while running) |
+| `GET` | `/api/session/{id}/transcript` | Every round's full text, claims, flags and verdicts |
+| `GET` | `/api/session/{id}/pdf` | PDF report (rebuilt on demand if missing) |
+| `GET` | `/api/session/{id}/export/{markdown\|docx\|bibtex}` | Other export formats |
+| `GET` | `/api/sessions?limit=20` | Recent sessions (history / compare) |
+| `POST` | `/api/extract-text` | Text from an uploaded PDF/DOCX/TXT proposal |
+| `GET` | `/api/health` | Health + active provider/model/budget |
 
-### Request body for `/api/session`
-
-```json
-{
-  "mode": 2,
-  "user_input": "Psilocybin-assisted therapy produces more durable remission in treatment-resistant depression than 12 months of standard SSRI pharmacotherapy."
-}
-```
-
-**Modes:**
-- `1` — Research topic (ARC formulates the hypothesis)
-- `2` — Full hypothesis (used as-is)
-- `3` — Partial proposal / abstract (ARC extracts the core claim)
+**Modes:** `1` research topic · `2` hypothesis (used as-is) · `3` partial proposal / abstract.
 
 ---
 
 ## How the Debate Works
 
 ```
-User Input
+User Input → Orchestrator → [you confirm/edit hypothesis + keywords]
     ↓
-Orchestrator → keywords + hypothesis
+Librarian → arXiv + OpenAlex + S2 (+ PubMed) → rerank → top 20 → ChromaDB
+    ↓                                   (0 papers → broaden once → fail fast)
+[optional: you review the papers]
     ↓
-Librarian → fetch papers → ChromaDB
+┌──────────────────── LangGraph Council ────────────────────┐
+│  Innovator R1 → Fact-Checker → Skeptic R2 → Fact-Checker  │
+│  → Chaos Agent → Innovator R3 → Fact-Checker              │
+│  → Skeptic R3 → Fact-Checker → Innovator R4 → Fact-Checker│
+│  → Chairman (RAGAS + 3 scoring passes + evaluation JSON)   │
+│       ↓                                                    │
+│  RAGAS ≥ 0.7 → END                                         │
+│  RAGAS < 0.7 → repair: Innovator revises/retracts flagged  │
+│               claims → Fact-Checker → Chairman (max 2×)    │
+└────────────────────────────────────────────────────────────┘
     ↓
-┌─────────────── LangGraph Council ───────────────┐
-│                                                  │
-│  Innovator R1 → Fact-Checker → Skeptic R2       │
-│  → Fact-Checker → Chaos Agent (constraint)      │
-│  → Innovator R3 → Skeptic R3                    │
-│  → Innovator R4 (defense) → Fact-Checker R4     │
-│  → Chairman (RAGAS score + evaluation JSON)      │
-│       ↓                                          │
-│  RAGAS ≥ 0.7 → END                              │
-│  RAGAS < 0.7 → retry (max 2×, stricter prompts) │
-└──────────────────────────────────────────────────┘
-    ↓
-PDF Report (novelty / feasibility / confidence scores)
+Report (best attempt) → PDF / Markdown / Word / BibTeX
 ```
+
+`ARC_RETRY_MODE=full` restores the original behaviour of re-running the whole debate on a retry.
 
 ### Scoring
 
 | Metric | How it works |
 |---|---|
-| **RAGAS Faithfulness** | `supported_claims / total_innovator_claims` — claims without a backing paper are hard-flagged and reduce the score |
-| **Novelty Score** | Chairman LLM judgment (0–100) |
-| **Feasibility Score** | Chairman LLM judgment (0–100) |
-| **Research Gap Score** | Chairman LLM judgment (0–100) |
-| **Overall Confidence** | Chairman LLM judgment (0–100) |
-
-Fact-Checker thresholds tighten on each retry: `45/60` → `55/70` → `65/80` (hard/soft cutoffs against ChromaDB relevance scores).
+| **RAGAS Faithfulness** | `supported / standing Innovator claims`; unsupported or contradicted claims are hard-flagged, partial support is a soft flag (still counts as supported); retracted/revised claims leave the denominator; zero claims scores 0 |
+| **Claim verdicts** | Fact-Checker judges each claim against its candidate abstracts and must quote the supporting sentence (quotes are verified verbatim); `ARC_CLAIM_CHECK=similarity` uses the legacy 45/60 relevance thresholds |
+| **Novelty / Feasibility / Research Gap / Overall** | Chairman judgement against an anchored rubric, informed by computed signals (nearest-paper similarity, claim verdict counts); median of `ARC_SCORING_SAMPLES` passes, range shown |
 
 ---
 

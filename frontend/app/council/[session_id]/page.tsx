@@ -2,6 +2,10 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
+import {
+  apiJson, apiUrl, formatCost, postFile, postJson,
+  type PaperSummary, type SessionResult,
+} from "@/lib/api";
 
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,300&family=Instrument+Sans:wght@400;500;600&display=swap');
@@ -358,6 +362,79 @@ const styles = `
     transition: width 0.6s ease;
   }
 
+  /* Topbar actions */
+  .topbar-actions { width: 180px; display: flex; justify-content: flex-end; }
+  .stop-btn {
+    font-family: 'Instrument Sans', sans-serif; font-size: 12px; font-weight: 600;
+    color: var(--red); background: var(--red-pale); border: 1px solid rgba(192,80,58,0.25);
+    padding: 7px 14px; border-radius: 8px; cursor: pointer; transition: all 0.2s ease;
+  }
+  .stop-btn:hover:not(:disabled) { background: #F5E0DB; }
+  .stop-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .home-link {
+    font-size: 12px; font-weight: 600; color: var(--ink-muted); text-decoration: none;
+    border: 1px solid var(--border); background: var(--white); padding: 7px 14px; border-radius: 8px;
+  }
+  .home-link:hover { color: var(--amber); border-color: var(--amber-light); }
+
+  /* Expandable full text */
+  .expand-btn {
+    background: none; border: none; padding: 0; margin-top: 6px;
+    font-family: 'Instrument Sans', sans-serif; font-size: 11px; font-weight: 600;
+    color: var(--amber); cursor: pointer; letter-spacing: 0.02em;
+  }
+  .event-full {
+    white-space: pre-wrap; margin-top: 8px; padding-top: 8px;
+    font-size: 13px; line-height: 1.6; color: var(--ink-muted);
+    border-top: 1px dashed var(--border);
+  }
+
+  /* Paper review */
+  .review-card {
+    border: 1.5px solid var(--amber); background: var(--white);
+    border-radius: 12px; padding: 18px 20px;
+    animation: slideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    opacity: 0; transform: translateY(8px);
+  }
+  .review-title { font-family: 'Fraunces', serif; font-size: 18px; font-weight: 300; margin-bottom: 4px; }
+  .review-title em { font-style: italic; color: var(--amber); }
+  .review-sub { font-size: 12px; color: var(--ink-muted); margin-bottom: 14px; line-height: 1.5; }
+  .paper-list {
+    display: flex; flex-direction: column; gap: 6px;
+    max-height: 360px; overflow-y: auto; padding-right: 4px; margin-bottom: 14px;
+  }
+  .paper-row {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg); cursor: pointer; transition: opacity 0.2s ease;
+  }
+  .paper-row.excluded { opacity: 0.45; }
+  .paper-row input { accent-color: var(--amber); margin-top: 3px; flex-shrink: 0; }
+  .paper-info { flex: 1; min-width: 0; }
+  .paper-title { font-size: 12px; font-weight: 600; color: var(--ink); line-height: 1.4; }
+  .paper-title a { color: inherit; text-decoration: none; }
+  .paper-title a:hover { color: var(--amber); }
+  .paper-meta { font-size: 11px; color: var(--ink-muted); margin-top: 2px; }
+  .relevance-badge { font-family: 'Fraunces', serif; font-size: 14px; color: var(--amber); flex-shrink: 0; }
+  .review-add { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .review-input {
+    flex: 1; min-width: 200px; background: var(--bg); border: 1.5px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; font-family: 'Instrument Sans', sans-serif;
+    font-size: 13px; color: var(--ink); outline: none;
+  }
+  .review-input:focus { border-color: var(--amber); background: var(--white); }
+  .small-btn {
+    font-family: 'Instrument Sans', sans-serif; font-size: 12px; font-weight: 600;
+    padding: 8px 14px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+    border: 1px solid var(--border); background: var(--white); color: var(--ink);
+    transition: all 0.2s ease;
+  }
+  .small-btn:hover:not(:disabled) { border-color: var(--amber); color: var(--amber); }
+  .small-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .review-error { font-size: 12px; color: var(--red); margin-bottom: 10px; }
+  .review-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .review-count { font-size: 12px; color: var(--ink-muted); }
+
   /* Animations */
   @keyframes slideIn { to { opacity: 1; transform: translateY(0); } }
   @keyframes fadeIn { to { opacity: 1; } }
@@ -381,6 +458,22 @@ const ROUND_NUM_TO_SIDEBAR: Record<number, number> = { 1: 0, 2: 1, 3: 2, 4: 3, 5
 const ROUND_ICONS = ["①", "②", "③", "④", "⑤"];
 const ROUND_LABELS = ["Opening", "Rebuttal", "Chaos Response", "Defense", "Consensus"];
 
+// Every pipeline event carries an id; these two are sent without one
+const EVENTS_WITHOUT_ID = new Set(["keepalive", "session_status"]);
+const SSE_EVENTS = [
+  "session_info", "queued", "papers_loaded", "papers_confirmed", "review_timeout",
+  "round_start", "round_complete", "claims_verified", "citation_flag", "chaos_injection",
+  "ragas_score", "retry", "retry_skipped", "pdf_failed", "report_ready", "pipeline_error",
+  "cancelled", "session_status", "keepalive",
+];
+
+const VERDICT_LABELS: Record<string, string> = {
+  unsupported: "Unsupported claim",
+  contradicted: "Contradicted claim",
+  partial: "Weak support",
+  fabricated: "Fabricated fact",
+};
+
 function timestamp() {
   return new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
@@ -391,9 +484,13 @@ interface FeedEvent {
   icon: string;
   agent: string;
   text: string;
+  detail?: string;
   tag?: string | null;
   time: string;
 }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type EventData = Record<string, any>;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function CouncilPage() {
@@ -414,12 +511,24 @@ export default function CouncilPage() {
   const [reportReady, setReportReady] = useState(false);
   const [progress, setProgress] = useState(0);
   const [hypothesis, setHypothesis] = useState<string | null>(null);
+  const [spend, setSpend] = useState(0);
+  const [finished, setFinished] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [expanded, setExpanded] = useState<number[]>([]);
+
+  // Paper review (between retrieval and debate)
+  const [reviewPapers, setReviewPapers] = useState<PaperSummary[] | null>(null);
+  const [excluded, setExcluded] = useState<string[]>([]);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [addInput, setAddInput] = useState("");
 
   const streamRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(1500);
   const isDoneRef = useRef(false);
+  const lastEventIdRef = useRef(-1);
   const eventIdCounter = useRef(0);
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -436,129 +545,226 @@ export default function CouncilPage() {
     });
   }
 
-  // ── SSE event handlers ───────────────────────────────────────────────────────
-
-  const handlePapersLoaded = useCallback((data: { papers_loaded: number; reused_cache: boolean }) => {
-    setPapersCount(data.papers_loaded);
-    setProgress(10);
-    addEvent({
-      type: "success", icon: "✓", agent: "Librarian",
-      text: `Fetched ${data.papers_loaded} papers from ArXiv and Semantic Scholar.${data.reused_cache ? " (cache reused)" : ""}`,
-    });
-    addEvent({
-      type: "success", icon: "✓", agent: "Librarian",
-      text: "Knowledge base ready. ChromaDB collection created for this session.",
-    });
-  }, []);
-
-  const handleRoundStart = useCallback((data: { round: number; agent: string }) => {
-    const sidebarIdx = ROUND_NUM_TO_SIDEBAR[data.round] ?? 0;
-    setActiveRound(sidebarIdx);
-    completeRoundsUpTo(sidebarIdx);
-    setIsTyping(true);
-    setTypingAgent(data.agent);
-
-    // Add round announcement card for first visit to each sidebar round
-    if (data.round === 1 || data.round === 2 || data.round === 4) {
-      const label = ROUND_LABELS[data.round - 1] ?? `Round ${data.round}`;
-      const agentLabel = `Round ${data.round}`;
-      addEvent({
-        type: "round",
-        icon: ROUND_ICONS[data.round - 1] ?? String(data.round),
-        agent: agentLabel,
-        text: `${label} — ${data.agent} ${data.round === 2 ? "analysing Innovator's argument" : data.round === 4 ? "addressing all objections" : "proposing research direction"}.`,
-      });
-    }
-  }, []);
-
-  const handleRoundComplete = useCallback((data: { round: number; agent: string; summary: string }) => {
-    setIsTyping(false);
-    setTypingAgent("");
-
-    addEvent({
-      type: "success", icon: "✓", agent: data.agent,
-      text: data.summary,
-    });
-
-    setProgress(prev => Math.min(prev + 15, 80));
-  }, []);
-
-  const handleChaosInjection = useCallback((data: { constraint: string }) => {
-    setIsTyping(false);
-    setActiveRound(2); // Chaos sidebar index
-    completeRoundsUpTo(2);
-    setProgress(55);
-    addEvent({
-      type: "chaos", icon: "⚡", agent: "Chaos Agent",
-      text: data.constraint,
-    });
-  }, []);
-
-  const handleCitationFlag = useCallback((data: { claim: string; agent: string }) => {
-    setFlagCount(f => f + 1);
-    addEvent({
-      type: "flag", icon: "⚑", agent: "Fact-Checker",
-      text: `Citation Flag on ${data.agent} — "${data.claim}" is not supported by any retrieved paper.`,
-    });
-  }, []);
-
-  const handleRagasScore = useCallback((data: { score: number; passed: boolean }) => {
-    setRagasScore(data.score);
-    setRagasPassed(data.passed);
-    setActiveRound(4); // Consensus
-    setCompletedRounds([0, 1, 2, 3]);
-    setProgress(90);
-    addEvent({
-      type: "round", icon: "⑤", agent: "Round 5",
-      text: "Consensus — Chairman synthesising debate and computing scores.",
-    });
-  }, []);
-
-  const handleRetry = useCallback((data: { attempt: number; reason: string }) => {
-    setActiveRound(0);
-    setCompletedRounds([]);
-    setProgress(10);
-    setRagasScore(null);
-    addEvent({
-      type: "warning", icon: "↺", agent: "System",
-      text: `RAGAS below threshold — starting retry ${data.attempt}/2. ${data.reason}`,
-    });
-  }, []);
-
-  const handleReportReady = useCallback(async (sid: string) => {
-    setReportReady(true);
-    setStatus("done");
-    setProgress(100);
-    setActiveRound(-1);
-    setCompletedRounds([0, 1, 2, 3, 4]);
+  function finish(nextStatus: "done" | "idle") {
     isDoneRef.current = true;
+    setFinished(true);
+    setStatus(nextStatus);
+    setIsTyping(false);
+    setReviewPapers(null);
     esRef.current?.close();
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+  }
 
-    // Fetch result to populate hypothesis chip, then auto-navigate to report
-    try {
-      const res = await fetch(`/api/session/${sid}/result`);
-      if (res.ok) {
-        const data = await res.json();
-        const h = data.evaluation_json?.refined_hypothesis ?? null;
-        if (h) setHypothesis(h);
-      }
-    } catch {
-      // non-critical
-    }
-
-    // Auto-navigate to report after a short pause so user sees the "complete" state
-    setTimeout(() => {
-      router.push(`/report/${sid}`);
-    }, 2000);
+  const goToReport = useCallback((sid: string, delayMs: number) => {
+    setTimeout(() => router.push(`/report/${sid}`), delayMs);
   }, [router]);
 
-  const handleError = useCallback((data: { message: string }) => {
-    setStatus("idle");
-    addEvent({
-      type: "flag", icon: "✗", agent: "System",
-      text: `Pipeline error: ${data.message}`,
-    });
-  }, []);
+  // ── SSE event handling (one dispatcher; kept in a ref so reconnects never use stale state) ──
+
+  function handleEvent(name: string, data: EventData) {
+    switch (name) {
+      case "session_info": {
+        if (data.hypothesis) setHypothesis(data.hypothesis);
+        addEvent({
+          type: "system", icon: "◎", agent: "Orchestrator",
+          text: `Council convened${data.model ? ` · model ${data.model}` : ""}${data.budget_usd ? ` · cost limit $${Number(data.budget_usd).toFixed(2)}` : ""}.`,
+        });
+        setIsTyping(true);
+        setTypingAgent("Librarian");
+        setProgress(4);
+        break;
+      }
+      case "queued":
+        addEvent({ type: "warning", icon: "…", agent: "System",
+          text: `Waiting for a free council chamber (position ${data.position ?? 1}). Other debates are running.` });
+        break;
+
+      case "papers_loaded": {
+        const count = Number(data.count ?? 0);
+        setPapersCount(count);
+        setProgress(10);
+        setIsTyping(false);
+        const sources = data.sources && Object.keys(data.sources).length
+          ? Object.entries(data.sources as Record<string, number>).map(([k, v]) => `${v} ${k.replace("_", " ")}`).join(", ")
+          : "";
+        addEvent({
+          type: "success", icon: "✓", agent: "Librarian",
+          text: `Fetched ${count} papers${sources ? ` (${sources})` : ""}${data.candidates ? `, ranked from ${data.candidates} candidates by relevance to the hypothesis` : ""}.${data.reused_cache ? " (cache reused)" : ""}`,
+        });
+        if (data.awaiting_review && Array.isArray(data.papers)) {
+          setReviewPapers(data.papers as PaperSummary[]);
+          setExcluded([]);
+        } else {
+          addEvent({ type: "success", icon: "✓", agent: "Librarian",
+            text: "Knowledge base ready. ChromaDB collection created for this session." });
+        }
+        break;
+      }
+      case "papers_confirmed":
+        setReviewPapers(null);
+        setPapersCount(Number(data.count ?? 0));
+        addEvent({ type: "success", icon: "✓", agent: "Librarian", text: `Debate will use ${data.count} papers.` });
+        break;
+      case "review_timeout":
+        setReviewPapers(null);
+        addEvent({ type: "warning", icon: "…", agent: "System", text: data.message ?? "Review timed out — continuing." });
+        break;
+
+      case "round_start": {
+        const round = Number(data.round);
+        const sidebarIdx = ROUND_NUM_TO_SIDEBAR[round] ?? 0;
+        setActiveRound(sidebarIdx);
+        completeRoundsUpTo(sidebarIdx);
+        setIsTyping(true);
+        setTypingAgent(data.agent);
+        if (data.stage === "repair") {
+          setProgress(85);
+          addEvent({ type: "round", icon: "↻", agent: `Repair ${data.attempt ?? ""}`.trim(),
+            text: "Innovator is revising or retracting the claims the Fact-Checker could not verify." });
+        } else if (round === 1 || round === 2 || round === 4) {
+          const label = ROUND_LABELS[round - 1] ?? `Round ${round}`;
+          addEvent({
+            type: "round",
+            icon: ROUND_ICONS[round - 1] ?? String(round),
+            agent: `Round ${round}`,
+            text: `${label} — ${data.agent} ${round === 2 ? "analysing Innovator's argument" : round === 4 ? "addressing all objections" : "proposing research direction"}.`,
+          });
+        }
+        break;
+      }
+      case "round_complete": {
+        setIsTyping(false);
+        setTypingAgent("");
+        if (typeof data.cost_usd === "number") setSpend(data.cost_usd);
+        const content: string = data.content ?? "";
+        const summary: string = data.summary ?? "";
+        const parts = [
+          typeof data.claims === "number" ? `${data.claims} ${data.agent === "Skeptic" ? "objections" : "claims"}` : null,
+          data.citations ? `${data.citations} paper${data.citations === 1 ? "" : "s"} cited` : null,
+          data.retracted ? `${data.retracted} retracted` : null,
+        ].filter(Boolean);
+        addEvent({
+          type: "success", icon: "✓", agent: data.stage === "repair" ? "Innovator · repair" : data.agent,
+          text: summary || content,
+          detail: content && content.length > summary.length ? content : undefined,
+          tag: parts.length ? parts.join(" · ") : null,
+        });
+        setProgress(prev => Math.min(prev + 12, 80));
+        break;
+      }
+      case "claims_verified": {
+        const counts = (data.counts ?? {}) as Record<string, number>;
+        const text = ["supported", "partial", "unsupported", "contradicted"]
+          .filter(k => counts[k]).map(k => `${counts[k]} ${k}`).join(" · ");
+        if (text) {
+          addEvent({ type: "system", icon: "⚖", agent: "Fact-Checker",
+            text: `${data.stage === "repair" ? "Repaired claims" : `Round ${data.round} claims`} checked against the paper abstracts: ${text}.` });
+        }
+        break;
+      }
+      case "citation_flag": {
+        const verdict = VERDICT_LABELS[data.verdict] ?? "Citation flag";
+        const text = `${verdict} on ${data.agent}: “${data.claim}”${data.reason ? ` — ${data.reason}` : ""}`;
+        if (data.severity === "soft") {
+          addEvent({ type: "warning", icon: "△", agent: "Fact-Checker", text });
+        } else {
+          setFlagCount(f => f + 1);
+          addEvent({ type: "flag", icon: "⚑", agent: "Fact-Checker", text });
+        }
+        break;
+      }
+      case "chaos_injection":
+        setIsTyping(false);
+        setActiveRound(2);
+        completeRoundsUpTo(2);
+        setProgress(55);
+        addEvent({
+          type: "chaos", icon: "⚡", agent: "Chaos Agent", text: data.constraint,
+          tag: data.selected_by === "user" ? "your constraint" : data.selected_by === "llm" ? "chosen as most relevant" : null,
+        });
+        break;
+
+      case "ragas_score":
+        setRagasScore(Number(data.score));
+        setRagasPassed(Boolean(data.passed));
+        setActiveRound(4);
+        setCompletedRounds([0, 1, 2, 3]);
+        setProgress(90);
+        setIsTyping(true);
+        setTypingAgent("Chairman");
+        addEvent({
+          type: "round", icon: "⑤", agent: data.attempt ? `Round 5 · attempt ${Number(data.attempt) + 1}` : "Round 5",
+          text: "Consensus — Chairman synthesising debate and computing scores.",
+        });
+        break;
+
+      case "retry":
+        setRagasScore(null);
+        if (data.mode === "full") {
+          setActiveRound(0);
+          setCompletedRounds([]);
+          setProgress(10);
+          addEvent({ type: "warning", icon: "↺", agent: "System",
+            text: `RAGAS below threshold — restarting the debate (retry ${data.attempt}/${data.max_attempts ?? 2}). ${data.reason ?? ""}` });
+        } else {
+          setActiveRound(3);
+          addEvent({ type: "warning", icon: "↺", agent: "System",
+            text: `${data.reason ?? "RAGAS below threshold"} — repair round ${data.attempt}/${data.max_attempts ?? 2}: ${data.flagged_claims ?? "the"} flagged claims go back to the Innovator.` });
+        }
+        break;
+      case "retry_skipped":
+        addEvent({ type: "system", icon: "·", agent: "System", text: `No further repair: ${data.reason ?? ""}` });
+        break;
+      case "pdf_failed":
+        addEvent({ type: "warning", icon: "!", agent: "Secretary",
+          text: "The PDF could not be generated. The report page and the Markdown/Word exports are still available." });
+        break;
+
+      case "report_ready": {
+        if (typeof data.cost_usd === "number") setSpend(data.cost_usd);
+        setReportReady(true);
+        setProgress(100);
+        setActiveRound(-1);
+        setCompletedRounds([0, 1, 2, 3, 4]);
+        finish("done");
+        const sid = data.session_id ?? sessionId;
+        apiJson<SessionResult>(`/api/session/${sid}/result`)
+          .then(res => { if (res.evaluation_json?.refined_hypothesis) setHypothesis(res.evaluation_json.refined_hypothesis); })
+          .catch(() => { /* non-critical */ });
+        goToReport(sid, 2500);
+        break;
+      }
+      case "pipeline_error":
+        addEvent({ type: "flag", icon: "✗", agent: "System", text: `Pipeline error: ${data.message}` });
+        finish("idle");
+        break;
+      case "cancelled":
+        addEvent({ type: "warning", icon: "■", agent: "System", text: data.message ?? "The debate was stopped." });
+        finish("idle");
+        break;
+      case "session_status":
+        // Sent when the server has no live stream for this session (finished earlier or restarted)
+        if (data.status === "complete") {
+          finish("done");
+          goToReport(sessionId, 0);
+        } else if (data.status === "error") {
+          addEvent({ type: "flag", icon: "✗", agent: "System", text: `Pipeline error: ${data.error || "the session failed."}` });
+          finish("idle");
+        } else if (data.status === "cancelled") {
+          addEvent({ type: "warning", icon: "■", agent: "System", text: "This debate was stopped." });
+          finish("idle");
+        } else if (data.status === "awaiting_confirmation" || data.status === "discarded") {
+          addEvent({ type: "system", icon: "·", agent: "System", text: "This session was prepared but never started." });
+          finish("idle");
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  const handlerRef = useRef(handleEvent);
+  handlerRef.current = handleEvent;
 
   // ── SSE connection ───────────────────────────────────────────────────────────
 
@@ -566,8 +772,8 @@ export default function CouncilPage() {
     if (isDoneRef.current) return;
     if (esRef.current) esRef.current.close();
 
-    const url = `http://localhost:8000/api/session/${sessionId}/stream`;
-    const es = new EventSource(url);
+    // EventSource cannot set Last-Event-ID on a new connection, so resume via query param
+    const es = new EventSource(apiUrl(`/api/session/${sessionId}/stream?last_event_id=${lastEventIdRef.current}`));
     esRef.current = es;
 
     es.onopen = () => {
@@ -581,64 +787,33 @@ export default function CouncilPage() {
       if (isDoneRef.current) return;
       setStatus("idle");
       es.close();
-      // Exponential backoff reconnect — EventSource Last-Event-ID replay handled by server
+      // Exponential backoff reconnect; the server replays everything after lastEventIdRef
       const delay = Math.min(reconnectDelay.current, 30_000);
       reconnectDelay.current = delay * 2;
       reconnectTimer.current = setTimeout(connectSSE, delay);
     };
 
-    es.addEventListener("papers_loaded", (e: MessageEvent) => {
-      handlePapersLoaded(JSON.parse(e.data));
-    });
-
-    es.addEventListener("round_start", (e: MessageEvent) => {
-      handleRoundStart(JSON.parse(e.data));
-    });
-
-    es.addEventListener("round_complete", (e: MessageEvent) => {
-      handleRoundComplete(JSON.parse(e.data));
-    });
-
-    es.addEventListener("chaos_injection", (e: MessageEvent) => {
-      handleChaosInjection(JSON.parse(e.data));
-    });
-
-    es.addEventListener("citation_flag", (e: MessageEvent) => {
-      handleCitationFlag(JSON.parse(e.data));
-    });
-
-    es.addEventListener("ragas_score", (e: MessageEvent) => {
-      handleRagasScore(JSON.parse(e.data));
-    });
-
-    es.addEventListener("retry", (e: MessageEvent) => {
-      handleRetry(JSON.parse(e.data));
-    });
-
-    es.addEventListener("report_ready", (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      handleReportReady(data.session_id ?? sessionId);
-    });
-
-    es.addEventListener("error_event", (e: MessageEvent) => {
-      // Named "error_event" to avoid clashing with the built-in "error" event
-      handleError(JSON.parse(e.data));
-    });
-
-    // The backend emits event type "error" — wire separately
-    es.addEventListener("error", (e: MessageEvent) => {
-      // Only handle message events (not connection errors, which fire on es.onerror)
-      if (e instanceof MessageEvent) {
-        handleError(JSON.parse(e.data));
-      }
-    });
-
-    es.addEventListener("keepalive", () => {
-      // no-op — just keeps connection alive
-    });
-  }, [sessionId, handlePapersLoaded, handleRoundStart, handleRoundComplete,
-      handleChaosInjection, handleCitationFlag, handleRagasScore,
-      handleRetry, handleReportReady, handleError]);
+    for (const name of SSE_EVENTS) {
+      es.addEventListener(name, (e: Event) => {
+        const msg = e as MessageEvent;
+        if (!EVENTS_WITHOUT_ID.has(name)) {
+          const id = Number(msg.lastEventId);
+          if (msg.lastEventId !== "" && !isNaN(id)) {
+            if (id <= lastEventIdRef.current) return; // already applied (replay overlap)
+            lastEventIdRef.current = id;
+          }
+        }
+        if (name === "keepalive") return;
+        let data: EventData = {};
+        try {
+          data = JSON.parse(msg.data);
+        } catch {
+          return;
+        }
+        handlerRef.current(name, data);
+      });
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -647,16 +822,22 @@ export default function CouncilPage() {
     isDoneRef.current = false;
     reconnectDelay.current = 1500;
 
-    // Check session validity before connecting SSE
-    fetch(`/api/session/${sessionId}/result`)
-      .then(res => {
+    fetch(apiUrl(`/api/session/${sessionId}/result`))
+      .then(async res => {
         if (res.status === 404) {
-          // Session not found (server restarted or invalid ID) — go home
-          router.replace("/");
-        } else {
-          // 200 (complete) or 202 (running) — connect SSE either way
-          connectSSE();
+          router.replace("/"); // unknown session id
+          return;
         }
+        if (res.status === 200) {
+          router.replace(`/report/${sessionId}`); // already finished
+          return;
+        }
+        if (res.status === 202) {
+          const body = await res.json().catch(() => ({}));
+          if (body.hypothesis) setHypothesis(body.hypothesis);
+        }
+        // 202 (running), 409 (cancelled) and 500 (failed): the stream replays what happened
+        connectSSE();
       })
       .catch(() => connectSSE());
 
@@ -672,15 +853,91 @@ export default function CouncilPage() {
     if (streamRef.current) {
       streamRef.current.scrollTop = streamRef.current.scrollHeight;
     }
-  }, [events, isTyping, ragasScore, reportReady]);
+  }, [events, isTyping, ragasScore, reportReady, reviewPapers]);
+
+  // ── Actions ──────────────────────────────────────────────────────────────────
+
+  async function stopDebate() {
+    setStopping(true);
+    try {
+      await postJson(`/api/session/${sessionId}/cancel`, {});
+    } catch (err: unknown) {
+      addEvent({ type: "flag", icon: "✗", agent: "System", text: err instanceof Error ? err.message : "Could not stop the debate." });
+      setStopping(false);
+    }
+  }
+
+  async function addPaper() {
+    const identifier = addInput.trim();
+    if (!identifier) return;
+    setReviewBusy(true);
+    setReviewError(null);
+    try {
+      // Unticked papers are dropped first, so adding works at the 20-paper cap
+      const res = await postJson<{ papers: PaperSummary[] }>(`/api/session/${sessionId}/papers`, {
+        identifier, remove_ids: excluded,
+      });
+      setReviewPapers(res.papers);
+      setExcluded([]);
+      setAddInput("");
+    } catch (err: unknown) {
+      setReviewError(err instanceof Error ? err.message : "Could not add that paper.");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  async function uploadPaper(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setReviewBusy(true);
+    setReviewError(null);
+    try {
+      const res = await postFile<{ papers: PaperSummary[] }>(
+        `/api/session/${sessionId}/papers/upload`, file, { remove_ids: excluded.join(",") },
+      );
+      setReviewPapers(res.papers);
+      setExcluded([]);
+    } catch (err: unknown) {
+      setReviewError(err instanceof Error ? err.message : "Could not read that PDF.");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  async function confirmPapers() {
+    setReviewBusy(true);
+    setReviewError(null);
+    try {
+      await postJson(`/api/session/${sessionId}/papers/confirm`, { remove_ids: excluded });
+      setReviewPapers(null);
+      setIsTyping(true);
+      setTypingAgent("Innovator");
+    } catch (err: unknown) {
+      setReviewError(err instanceof Error ? err.message : "Could not start the debate.");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
+  function toggleExcluded(id: string) {
+    setExcluded(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  function toggleExpanded(id: number) {
+    setExpanded(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
 
   // ── Render ───────────────────────────────────────────────────────────────────
   const sessionChip = sessionId ? sessionId.slice(0, 8).toUpperCase() : "——";
   const reportSubText = [
-    "All 5 rounds complete",
+    "All rounds complete",
     ragasScore !== null ? `RAGAS ${ragasScore.toFixed(2)}` : null,
-    papersCount > 0 ? `${papersCount} papers cited` : null,
+    papersCount > 0 ? `${papersCount} papers retrieved` : null,
+    spend > 0 ? `${formatCost(spend)} spent` : null,
   ].filter(Boolean).join(" · ");
+  const keptPapers = reviewPapers ? reviewPapers.length - excluded.length : 0;
 
   return (
     <>
@@ -703,12 +960,20 @@ export default function CouncilPage() {
           <div className="topbar-center">
             <div className={`live-dot ${status}`} />
             <span className={`live-label ${status}`}>
-              {status === "live" ? "Debate live" : status === "done" ? "Complete" : "Connecting…"}
+              {status === "live" ? "Debate live" : status === "done" ? "Complete" : finished ? "Stopped" : "Connecting…"}
             </span>
             <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>·</span>
             <span className="session-chip">Session #{sessionChip}</span>
           </div>
-          <div style={{ width: 180 }} />
+          <div className="topbar-actions">
+            {finished ? (
+              <a className="home-link" href="/">New session</a>
+            ) : (
+              <button className="stop-btn" onClick={stopDebate} disabled={stopping}>
+                {stopping ? "Stopping…" : "■ Stop debate"}
+              </button>
+            )}
+          </div>
         </header>
 
         {/* ── Sidebar ── */}
@@ -759,6 +1024,10 @@ export default function CouncilPage() {
                   {ragasScore !== null ? ragasScore.toFixed(2) : "—"}
                 </div>
               </div>
+              <div className="stat-item">
+                <div className="stat-label">LLM Spend</div>
+                <div className="stat-value">{spend > 0 ? formatCost(spend) : "—"}</div>
+              </div>
             </div>
           </div>
         </aside>
@@ -784,6 +1053,7 @@ export default function CouncilPage() {
                   <div className="event-body">
                     <div className="chaos-label">⚡ Chaos Injection</div>
                     <div className="event-text">{ev.text}</div>
+                    {ev.tag && <div className="citation-tag">{ev.tag}</div>}
                     <div className="event-time" style={{ marginTop: 6 }}>{ev.time}</div>
                   </div>
                 </div>
@@ -797,13 +1067,68 @@ export default function CouncilPage() {
                     </div>
                     <div className="event-text">{ev.text}</div>
                     {ev.tag && <div className="citation-tag">📎 {ev.tag}</div>}
+                    {ev.detail && (
+                      <>
+                        <button className="expand-btn" onClick={() => toggleExpanded(ev.id)}>
+                          {expanded.includes(ev.id) ? "Hide full argument ▲" : "Show full argument ▼"}
+                        </button>
+                        {expanded.includes(ev.id) && <div className="event-full">{ev.detail}</div>}
+                      </>
+                    )}
                   </div>
                 </div>
               )
             ))}
 
+            {/* Paper review — the user curates the corpus before any debate tokens are spent */}
+            {reviewPapers && (
+              <div className="review-card">
+                <div className="review-title">Review the <em>papers</em></div>
+                <div className="review-sub">
+                  The debate is paused. Untick papers that are off-topic, or add your own by arXiv ID, DOI or PDF. Every claim will be checked against this set.
+                </div>
+                <div className="paper-list">
+                  {reviewPapers.map(p => (
+                    <label key={p.id} className={`paper-row ${excluded.includes(p.id) ? "excluded" : ""}`}>
+                      <input type="checkbox" checked={!excluded.includes(p.id)} onChange={() => toggleExcluded(p.id)} />
+                      <div className="paper-info">
+                        <div className="paper-title">
+                          {p.url ? <a href={p.url} target="_blank" rel="noreferrer">{p.title}</a> : p.title}
+                        </div>
+                        <div className="paper-meta">
+                          {[p.authors, p.year, p.source.replace("_", " "), p.user_added ? "added by you" : ""].filter(Boolean).join(" · ")}
+                        </div>
+                      </div>
+                      <span className="relevance-badge" title="Similarity to the hypothesis (0-100)">{Math.round(p.relevance)}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="review-add">
+                  <input
+                    className="review-input"
+                    value={addInput}
+                    placeholder="arXiv ID (2401.01234) or DOI (10.1038/…)"
+                    onChange={e => setAddInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") addPaper(); }}
+                  />
+                  <button className="small-btn" onClick={addPaper} disabled={reviewBusy || !addInput.trim()}>Add paper</button>
+                  <label className="small-btn" style={{ opacity: reviewBusy ? 0.45 : 1 }}>
+                    Upload PDF
+                    <input type="file" accept=".pdf" hidden disabled={reviewBusy} onChange={uploadPaper} />
+                  </label>
+                </div>
+                {reviewError && <div className="review-error">{reviewError}</div>}
+                <div className="review-actions">
+                  <span className="review-count">{keptPapers} of {reviewPapers.length} papers selected</span>
+                  <button className="view-report-btn" onClick={confirmPapers} disabled={reviewBusy || keptPapers === 0}>
+                    Begin debate →
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Typing indicator */}
-            {isTyping && (
+            {isTyping && !reviewPapers && (
               <div className="typing-indicator">
                 <div className="typing-dots">
                   <div className="typing-dot" />
@@ -821,10 +1146,10 @@ export default function CouncilPage() {
                 <div className="ragas-info">
                   <div className="ragas-title">RAGAS Faithfulness Score</div>
                   <div className="ragas-desc">
-                    {Math.round(ragasScore * 100)}% of claims are supported by retrieved papers.
+                    {Math.round(ragasScore * 100)}% of standing claims are supported by retrieved papers.
                     {ragasPassed
                       ? " Threshold passed — proceeding to report generation."
-                      : " Below threshold — low confidence flag set."}
+                      : " Below threshold — flagged claims go to a repair round (max 2), otherwise the low-confidence flag is set."}
                   </div>
                 </div>
                 <div className={`ragas-badge ${ragasPassed ? "" : "fail"}`}>

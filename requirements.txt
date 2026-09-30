@@ -1,10 +1,15 @@
-fastapi
-uvicorn[standard]
-openai
-chromadb
-sentence-transformers
-requests
-python-dotenv
-langgraph
-sse-starlette
-reportlab
+# Pinned to the versions the project is tested with (Python 3.13).
+fastapi==0.136.3
+uvicorn[standard]==0.42.0
+openai==2.26.0
+chromadb==1.5.5
+sentence-transformers==5.2.3
+requests==2.34.2
+python-dotenv==1.0.1
+langgraph==1.0.1
+sse-starlette==3.0.2
+reportlab==4.4.10
+pydantic==2.12.5
+pypdf==6.7.4
+python-docx==1.2.0
+python-multipart==0.0.32

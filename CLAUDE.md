@@ -11,12 +11,14 @@ Always read it before making architectural decisions.
 
 ## Tech Stack
 - Backend: FastAPI + LangGraph (Python)
-- LLM: Groq API (env: GROQ_API_KEY) → OpenRouter for final demo
-- Groq base_url: https://api.groq.com/openai/v1
-- Model: llama-3.3-70b-versatile
+- LLM: OpenRouter (env: OPENROUTER_API_KEY) via backend/llm/client.py
+- Model: ARC_MODEL (default anthropic/claude-sonnet-5.5), per-agent ARC_MODEL_<AGENT>
+- Groq llama-3.3-70b-versatile optional (ARC_LLM_PROVIDER=groq); ARC_LLM_PROVIDER=mock for offline tests
+- All agent replies use JSON-schema structured outputs + backend/llm/json_utils.py
 - Vector DB: ChromaDB (session-namespaced by uuid4)
 - Embeddings: sentence-transformers (local, no API cost)
-- Paper Sources: ArXiv API + Semantic Scholar API
+- Paper Sources: ArXiv + OpenAlex + Semantic Scholar (+ PubMed for biomedical), reranked to top 20
+- Sessions: SQLite (sessions/arc.db); per-call LLM logs in logs/<session_id>.jsonl
 - Frontend: Next.js + Apache ECharts
 - Real-time: Server-Sent Events (SSE)
 - PDF: ReportLab
@@ -36,8 +38,11 @@ Always read it before making architectural decisions.
 - Max 20 papers per session
 - All agents are separate files in backend/agents/
 - LangGraph state schema lives in graph/council_graph.py
-- Max 2 debate retries on RAGAS < 0.7
+- Max 2 retries on RAGAS < 0.7 — targeted repair of flagged claims by default
+  (ARC_RETRY_MODE=full re-runs the whole debate, the original method)
 - Chairman produces single JSON — source of truth for entire output
+  (assembled + normalized in backend/scoring/evaluation.py)
+- Run `python -m pytest tests -q` (offline, mock LLM) after backend changes
 - Never build beyond the current phase without explicit instruction
 
 

@@ -1,6 +1,6 @@
-import os
-
-import requests
+from backend.config import env_secret
+from backend.fetchers.common import http_get
+from backend.fetchers.common import merge_and_deduplicate as _merge
 
 S2_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 S2_FIELDS = "title,abstract,authors,year,externalIds,url"
@@ -8,14 +8,18 @@ S2_FIELDS = "title,abstract,authors,year,externalIds,url"
 
 def fetch_semantic_scholar_papers(keywords: list[str], max_results: int = 10) -> list[dict]:
     """
-    Queries Semantic Scholar public API.
+    Queries the Semantic Scholar public API.
+
+    The API key is only sent when SEMANTIC_SCHOLAR_API_KEY holds a real value — the
+    .env.example placeholder used to be sent verbatim, which S2 rejects with 403.
+    Unauthenticated requests share a global rate limit, so 429s are retried once.
 
     Returns list of paper dicts with keys:
-        title, abstract, authors, url, paper_id, year, source
+        title, abstract, authors, url, paper_id, doi, arxiv_id, year, source
     """
     query = " ".join(keywords)
     headers = {}
-    api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+    api_key = env_secret("SEMANTIC_SCHOLAR_API_KEY")
     if api_key:
         headers["x-api-key"] = api_key
 
@@ -25,14 +29,12 @@ def fetch_semantic_scholar_papers(keywords: list[str], max_results: int = 10) ->
         "fields": S2_FIELDS,
     }
 
-    try:
-        response = requests.get(S2_SEARCH_URL, params=params, headers=headers, timeout=15)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[S2] Request failed: {e}")
+    resp = http_get(S2_SEARCH_URL, params=params, headers=headers, timeout=15,
+                    retries=1, backoff_s=2.0, label="S2")
+    if resp is None:
         return []
 
-    data = response.json().get("data", [])
+    data = resp.json().get("data", []) or []
     papers = []
     for item in data:
         title = item.get("title") or ""
@@ -40,11 +42,11 @@ def fetch_semantic_scholar_papers(keywords: list[str], max_results: int = 10) ->
         year = item.get("year")
         paper_id = item.get("paperId") or ""
 
-        authors = [a.get("name", "") for a in item.get("authors", [])]
+        authors = [a.get("name", "") for a in item.get("authors", []) or []]
 
         # Prefer DOI URL, fall back to S2 URL
         external = item.get("externalIds") or {}
-        doi = external.get("DOI")
+        doi = external.get("DOI") or ""
         url = f"https://doi.org/{doi}" if doi else f"https://www.semanticscholar.org/paper/{paper_id}"
 
         if title and abstract:
@@ -55,6 +57,8 @@ def fetch_semantic_scholar_papers(keywords: list[str], max_results: int = 10) ->
                     "authors": authors,
                     "url": url,
                     "paper_id": paper_id,
+                    "doi": doi,
+                    "arxiv_id": external.get("ArXiv") or "",
                     "year": year,
                     "source": "semantic_scholar",
                 }
@@ -63,30 +67,6 @@ def fetch_semantic_scholar_papers(keywords: list[str], max_results: int = 10) ->
     return papers
 
 
-def merge_and_deduplicate(
-    arxiv_papers: list[dict],
-    ss_papers: list[dict],
-    max_total: int = 20,
-) -> list[dict]:
-    """
-    Merges both paper lists. Deduplicates by lowercased normalized title.
-    ArXiv papers take priority. Caps result at max_total (20 per plan).
-    """
-    seen_titles: set[str] = set()
-    merged: list[dict] = []
-
-    for paper in arxiv_papers + ss_papers:
-        normalized = _normalize_title(paper.get("title", ""))
-        if normalized and normalized not in seen_titles:
-            seen_titles.add(normalized)
-            merged.append(paper)
-        if len(merged) >= max_total:
-            break
-
-    return merged
-
-
-def _normalize_title(title: str) -> str:
-    """Lowercase + strip punctuation for deduplication."""
-    import re
-    return re.sub(r"[^a-z0-9 ]", "", title.lower()).strip()
+def merge_and_deduplicate(arxiv_papers: list[dict], ss_papers: list[dict], max_total: int = 20) -> list[dict]:
+    """Backwards-compatible wrapper around fetchers.common.merge_and_deduplicate."""
+    return _merge(arxiv_papers, ss_papers, max_total=max_total)

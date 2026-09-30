@@ -18,15 +18,18 @@ env/
 # ChromaDB data
 chroma_store/
 
-# Session artifacts
+# Session artifacts (SQLite store, PDFs) and per-call LLM logs (contain full prompts/replies)
 sessions/
+logs/
 
 # Next.js
 frontend/.next/
 frontend/node_modules/
 frontend/out/
+*.tsbuildinfo
 
 # Misc
 .DS_Store
 Thumbs.db
 *.log
+.pytest_cache/

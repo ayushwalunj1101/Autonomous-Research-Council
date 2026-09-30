@@ -1,7 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  apiJson, formatCost, formatDate, postFile, postJson,
+  type SessionListItem,
+} from "@/lib/api";
 
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,300&family=Instrument+Sans:wght@400;500;600&display=swap');
@@ -535,12 +539,99 @@ const styles = `
     to { transform: rotate(360deg); }
   }
 
+  /* Upload (mode 3) */
+  .upload-btn {
+    font-size: 12px; font-weight: 600; color: var(--amber);
+    background: var(--amber-pale); border: 1px solid var(--amber-light);
+    padding: 5px 12px; border-radius: 20px; cursor: pointer;
+    font-family: 'Instrument Sans', sans-serif; transition: all 0.2s ease;
+  }
+  .upload-btn:hover { border-color: var(--amber); }
+  .upload-btn.disabled { opacity: 0.5; pointer-events: none; }
+
+  .notice-banner {
+    font-size: 12px; color: var(--ink-muted); background: var(--amber-pale);
+    border: 1px solid var(--amber-light); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 14px; line-height: 1.45;
+  }
+
+  /* Confirm panel */
+  .confirm-panel {
+    background: var(--white); border: 1.5px solid var(--amber-light);
+    border-radius: 12px; padding: 22px 22px 18px; margin-bottom: 20px;
+    box-shadow: 0 4px 16px rgba(184,147,90,0.08);
+    opacity: 0; transform: translateY(10px);
+    animation: fadeUp 0.4s ease forwards;
+  }
+  .confirm-title { font-family: 'Fraunces', serif; font-size: 20px; font-weight: 300; margin-bottom: 4px; }
+  .confirm-title em { font-style: italic; color: var(--amber); }
+  .confirm-sub { font-size: 13px; color: var(--ink-muted); margin-bottom: 18px; line-height: 1.5; }
+  .field { margin-bottom: 16px; }
+  .field-label {
+    display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--ink-muted); margin-bottom: 8px;
+  }
+  .field-hint { font-size: 12px; color: var(--ink-faint); margin-top: 6px; line-height: 1.45; }
+  .text-input {
+    width: 100%; background: var(--bg); border: 1.5px solid var(--border); border-radius: 10px;
+    padding: 11px 14px; font-family: 'Instrument Sans', sans-serif; font-size: 14px; color: var(--ink);
+    outline: none; transition: all 0.2s ease;
+  }
+  .text-input:focus { border-color: var(--amber); background: var(--white); box-shadow: 0 0 0 3px rgba(184,147,90,0.1); }
+  textarea.text-input { resize: vertical; min-height: 84px; line-height: 1.55; }
+  .keyword-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .toggle-row {
+    display: flex; align-items: flex-start; gap: 10px; font-size: 13px;
+    color: var(--ink); cursor: pointer; line-height: 1.45; margin-bottom: 16px;
+  }
+  .toggle-row input { margin-top: 3px; accent-color: var(--amber); width: 15px; height: 15px; flex-shrink: 0; }
+  .toggle-row small { display: block; color: var(--ink-muted); font-size: 12px; }
+  .confirm-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; }
+  .ghost-btn {
+    background: transparent; border: 1.5px solid var(--border); border-radius: 10px;
+    padding: 12px 18px; font-family: 'Instrument Sans', sans-serif; font-size: 13px; font-weight: 600;
+    color: var(--ink-muted); cursor: pointer; transition: all 0.2s ease; white-space: nowrap;
+  }
+  .ghost-btn:hover:not(:disabled) { border-color: var(--ink-faint); color: var(--ink); }
+  .ghost-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .mode-card:disabled { cursor: default; }
+  .mode-card:disabled:hover { transform: none; box-shadow: none; }
+
+  /* Recent sessions */
+  .history { padding: 0 0 60px; opacity: 0; animation: fadeIn 0.5s ease 0.55s forwards; }
+  .history-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; }
+  .history-list { display: flex; flex-direction: column; gap: 8px; }
+  .history-item {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--white); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; transition: all 0.2s ease;
+  }
+  .history-item:hover { border-color: var(--ink-faint); box-shadow: 0 4px 16px rgba(14,14,12,0.05); }
+  .history-item input { accent-color: var(--amber); width: 15px; height: 15px; flex-shrink: 0; }
+  .history-main {
+    flex: 1; min-width: 0; cursor: pointer; background: none; border: none; text-align: left;
+    font-family: 'Instrument Sans', sans-serif; padding: 0;
+  }
+  .history-title { font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .history-meta { font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+  .status-pill {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 20px; flex-shrink: 0;
+    background: var(--bg); color: var(--ink-muted); border: 1px solid var(--border);
+  }
+  .status-pill.complete { background: #EDF5F0; color: #3A7D5C; border-color: rgba(58,125,92,0.25); }
+  .status-pill.error, .status-pill.cancelled { background: #FEF2EE; color: #9B3B1E; border-color: #F0C4B4; }
+  .status-pill.active { background: var(--amber-pale); color: var(--amber); border-color: var(--amber-light); }
+
   /* Responsive */
   @media (max-width: 600px) {
     .mode-grid { grid-template-columns: 1fr; }
     .bottom-row { flex-direction: column; gap: 16px; align-items: stretch; }
     .submit-btn { justify-content: center; }
     .help-text { max-width: 100%; }
+    .confirm-actions { flex-direction: column-reverse; align-items: stretch; }
+    .history-item { flex-wrap: wrap; }
   }
 `;
 
@@ -568,41 +659,150 @@ const MODES = [
 const AGENTS = ["Orchestrator", "Librarian", "Innovator", "Skeptic", "Fact-Checker", "Chaos", "Chairman", "Secretary"];
 const HIGHLIGHT_AGENTS = ["Innovator", "Skeptic", "Fact-Checker"];
 
+// Topics and hypotheses stay short; proposals (mode 3) can be a full abstract or methodology.
+const MAX_CHARS_BY_MODE = [1200, 1200, 12000];
+const ACTIVE_STATUSES = ["queued", "preparing", "fetching", "awaiting_review", "running"];
+
+interface PreparedSession {
+  session_id: string;
+  hypothesis: string;
+  keywords: string[];
+  domain: string;
+}
+
+interface HealthInfo {
+  model: string;
+  budget_usd: number;
+}
+
+function parseKeywords(text: string): string[] {
+  return text.split(",").map(k => k.trim()).filter(Boolean);
+}
+
 export default function InputPage() {
   const router = useRouter();
   const [selectedMode, setSelectedMode] = useState(1);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const MAX_CHARS = 1200;
+  const [notice, setNotice] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
+  // Confirm step (after the Orchestrator has read the input)
+  const [prepared, setPrepared] = useState<PreparedSession | null>(null);
+  const [hypothesisDraft, setHypothesisDraft] = useState("");
+  const [keywordsDraft, setKeywordsDraft] = useState("");
+  const [reviewPapers, setReviewPapers] = useState(true);
+  const [chaosDraft, setChaosDraft] = useState("");
+  const [parentId, setParentId] = useState<string | null>(null);
+
+  const [history, setHistory] = useState<SessionListItem[]>([]);
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [health, setHealth] = useState<HealthInfo | null>(null);
+
+  const MAX_CHARS = MAX_CHARS_BY_MODE[selectedMode];
   const mode = MODES[selectedMode];
-  const canSubmit = inputValue.trim().length > 8 && !isLoading;
+  const canSubmit = inputValue.trim().length > 8 && !isLoading && !uploading;
+  const draftKeywords = parseKeywords(keywordsDraft);
+  const canStart = !!prepared && hypothesisDraft.trim().length > 8 && draftKeywords.length > 0 && !isLoading;
+
+  // Prefill from "Run again with refined hypothesis" links: /?mode=2&input=...&parent=<session_id>
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const m = Number(params.get("mode"));
+    const modeIdx = m >= 1 && m <= 3 ? m - 1 : null;
+    if (modeIdx !== null) setSelectedMode(modeIdx);
+    const input = params.get("input");
+    if (input) setInputValue(input.slice(0, MAX_CHARS_BY_MODE[modeIdx ?? 1]));
+    const parent = params.get("parent");
+    if (parent) setParentId(parent);
+
+    apiJson<{ sessions: SessionListItem[] }>("/api/sessions?limit=8")
+      .then(d => setHistory(d.sessions))
+      .catch(() => { /* history is optional */ });
+    apiJson<HealthInfo>("/api/health").then(setHealth).catch(() => { /* optional */ });
+  }, []);
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
     setIsLoading(true);
     setError(null);
+    setNotice(null);
 
     try {
-      const res = await fetch("/api/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: selectedMode + 1, user_input: inputValue }),
+      const res = await postJson<PreparedSession>("/api/session/prepare", {
+        mode: selectedMode + 1,
+        user_input: inputValue,
+        parent_session_id: parentId,
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || `Request failed (${res.status})`);
-      }
-
-      const { session_id } = await res.json();
-      router.push(`/council/${session_id}`);
+      setPrepared(res);
+      setHypothesisDraft(res.hypothesis);
+      setKeywordsDraft(res.keywords.join(", "));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    } finally {
       setIsLoading(false);
     }
   };
+
+  const handleStart = async () => {
+    if (!prepared || !canStart) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      await postJson(`/api/session/${prepared.session_id}/start`, {
+        hypothesis: hypothesisDraft.trim(),
+        keywords: draftKeywords,
+        review_papers: reviewPapers,
+        chaos_constraint: chaosDraft.trim() || null,
+      });
+      router.push(`/council/${prepared.session_id}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not start the debate.");
+      setIsLoading(false);
+    }
+  };
+
+  const handleBack = () => {
+    if (prepared) {
+      // Discard the prepared (never started) session so it does not linger in history
+      postJson(`/api/session/${prepared.session_id}/cancel`, {}).catch(() => {});
+    }
+    setPrepared(null);
+    setError(null);
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await postFile<{ text: string; truncated: boolean }>("/api/extract-text", file);
+      setInputValue(res.text.slice(0, MAX_CHARS));
+      if (res.truncated || res.text.length > MAX_CHARS) {
+        setNotice(`"${file.name}" is long; only the first ${MAX_CHARS.toLocaleString()} characters were kept. Trim it to the abstract and methodology for best results.`);
+      } else {
+        setNotice(`Loaded text from "${file.name}".`);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not read that file.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const openSession = (item: SessionListItem) => {
+    router.push(item.status === "complete" ? `/report/${item.session_id}` : `/council/${item.session_id}`);
+  };
+
+  const toggleCompare = (id: string) => {
+    setCompareIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id].slice(-2));
+  };
+
+  const locked = !!prepared || isLoading;
 
   return (
     <>
@@ -645,7 +845,8 @@ export default function InputPage() {
                 <button
                   key={i}
                   className={`mode-card ${selectedMode === i ? "selected" : ""}`}
-                  onClick={() => { setSelectedMode(i); setInputValue(""); setError(null); }}
+                  disabled={locked}
+                  onClick={() => { setSelectedMode(i); setInputValue(""); setError(null); setNotice(null); }}
                 >
                   <div className="mode-num">{m.num}</div>
                   <div className="mode-name">{m.name}</div>
@@ -662,21 +863,31 @@ export default function InputPage() {
               <div className="section-label" style={{ marginBottom: 0 }}>
                 {selectedMode === 0 ? "Your research topic" : selectedMode === 1 ? "Your hypothesis" : "Your draft proposal"}
               </div>
-              <span className="input-hint">
-                {selectedMode === 0 ? "Be specific for better results" : selectedMode === 1 ? "State it as a testable claim" : "Abstract or methodology works"}
-              </span>
+              {selectedMode === 2 ? (
+                <label className={`upload-btn ${uploading || locked ? "disabled" : ""}`}>
+                  {uploading ? "Reading file…" : "Upload PDF / DOCX"}
+                  <input type="file" accept=".pdf,.docx,.txt,.md" hidden onChange={handleUpload} />
+                </label>
+              ) : (
+                <span className="input-hint">
+                  {selectedMode === 0 ? "Be specific for better results" : "State it as a testable claim"}
+                </span>
+              )}
             </div>
             <textarea
               className={`research-textarea${error ? " error-border" : ""}`}
               placeholder={mode.placeholder}
               value={inputValue}
+              readOnly={locked}
               onChange={e => { setInputValue(e.target.value.slice(0, MAX_CHARS)); setError(null); }}
-              rows={6}
+              rows={selectedMode === 2 ? 10 : 6}
             />
             <span className={`char-count ${inputValue.length > MAX_CHARS * 0.9 ? "warn" : ""}`}>
               {inputValue.length}/{MAX_CHARS}
             </span>
           </div>
+
+          {notice && <div className="notice-banner">{notice}</div>}
 
           {/* Error Banner */}
           {error && (
@@ -686,6 +897,81 @@ export default function InputPage() {
                 <path d="M8 5v3.5M8 11h.01" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
               </svg>
               {error}
+            </div>
+          )}
+
+          {/* Confirm step — review what the Orchestrator extracted before spending a full debate */}
+          {prepared && (
+            <div className="confirm-panel">
+              <div className="confirm-title">Before the <em>Council</em> convenes</div>
+              <div className="confirm-sub">
+                The Orchestrator read your input as the hypothesis and search keywords below. Edit anything it got wrong — a bad keyword means the wrong papers.
+              </div>
+
+              <div className="field">
+                <label className="field-label" htmlFor="hypothesis">Hypothesis to debate</label>
+                <textarea
+                  id="hypothesis"
+                  className="text-input"
+                  value={hypothesisDraft}
+                  maxLength={2000}
+                  onChange={e => setHypothesisDraft(e.target.value)}
+                />
+              </div>
+
+              <div className="field">
+                <label className="field-label" htmlFor="keywords">Search keywords</label>
+                <input
+                  id="keywords"
+                  className="text-input"
+                  value={keywordsDraft}
+                  onChange={e => setKeywordsDraft(e.target.value)}
+                  placeholder="federated learning, clinical prediction"
+                />
+                <div className="keyword-chips">
+                  {draftKeywords.map(k => <span key={k} className="agent-pill highlight">{k}</span>)}
+                </div>
+                <div className="field-hint">Comma-separated. The first two keywords drive the arXiv query; all of them go to OpenAlex and Semantic Scholar.</div>
+              </div>
+
+              <label className="toggle-row">
+                <input type="checkbox" checked={reviewPapers} onChange={e => setReviewPapers(e.target.checked)} />
+                <span>
+                  Let me review the papers before the debate starts
+                  <small>Remove irrelevant papers or add your own (arXiv ID, DOI or PDF).</small>
+                </span>
+              </label>
+
+              <div className="field">
+                <label className="field-label" htmlFor="chaos">Chaos constraint (optional)</label>
+                <input
+                  id="chaos"
+                  className="text-input"
+                  value={chaosDraft}
+                  maxLength={500}
+                  onChange={e => setChaosDraft(e.target.value)}
+                  placeholder="Leave empty to let the Chaos Agent pick the most relevant one"
+                />
+              </div>
+
+              <div className="confirm-actions">
+                <button className="ghost-btn" onClick={handleBack} disabled={isLoading}>← Edit input</button>
+                <button className={`submit-btn ${isLoading ? "loading" : ""}`} onClick={handleStart} disabled={!canStart}>
+                  {isLoading ? (
+                    <>
+                      <div className="spinner" />
+                      <span>Starting…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Start the Debate</span>
+                      <svg className="btn-arrow" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M3 8H13M13 8L9 4M13 8L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           )}
 
@@ -700,30 +986,78 @@ export default function InputPage() {
           </div>
 
           {/* Submit Row */}
-          <div className="bottom-row">
-            <p className="help-text">
-              The Council will fetch real papers from ArXiv and Semantic Scholar before the debate begins.
-            </p>
-            <button
-              className={`submit-btn ${isLoading ? "loading" : ""}`}
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-            >
-              {isLoading ? (
-                <>
-                  <div className="spinner" />
-                  <span>Convening Council…</span>
-                </>
-              ) : (
-                <>
-                  <span>Convene the Council</span>
-                  <svg className="btn-arrow" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M3 8H13M13 8L9 4M13 8L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                </>
-              )}
-            </button>
-          </div>
+          {!prepared && (
+            <div className="bottom-row">
+              <p className="help-text">
+                The Council will fetch real papers from arXiv, OpenAlex, Semantic Scholar and PubMed before the debate begins.
+                {health && <> Model: {health.model} · cost limit ${health.budget_usd.toFixed(2)} per session.</>}
+              </p>
+              <button
+                className={`submit-btn ${isLoading ? "loading" : ""}`}
+                onClick={handleSubmit}
+                disabled={!canSubmit}
+              >
+                {isLoading ? (
+                  <>
+                    <div className="spinner" />
+                    <span>Reading your input…</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Convene the Council</span>
+                    <svg className="btn-arrow" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M3 8H13M13 8L9 4M13 8L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Recent sessions */}
+          {history.length > 0 && (
+            <section className="history">
+              <div className="history-head">
+                <div className="section-label" style={{ marginBottom: 0 }}>Recent sessions</div>
+                <button
+                  className="ghost-btn"
+                  style={{ padding: "8px 14px", fontSize: 12 }}
+                  disabled={compareIds.length !== 2}
+                  onClick={() => router.push(`/compare?a=${compareIds[0]}&b=${compareIds[1]}`)}
+                >
+                  Compare selected ({compareIds.length}/2)
+                </button>
+              </div>
+              <div className="history-list">
+                {history.map(item => {
+                  const statusClass = item.status === "complete" ? "complete"
+                    : item.status === "error" || item.status === "cancelled" ? item.status
+                    : ACTIVE_STATUSES.includes(item.status) ? "active" : "";
+                  return (
+                    <div key={item.session_id} className="history-item">
+                      <input
+                        type="checkbox"
+                        title="Select to compare"
+                        disabled={item.status !== "complete"}
+                        checked={compareIds.includes(item.session_id)}
+                        onChange={() => toggleCompare(item.session_id)}
+                      />
+                      <button className="history-main" onClick={() => openSession(item)}>
+                        <div className="history-title">{item.refined_hypothesis || item.hypothesis || "Untitled session"}</div>
+                        <div className="history-meta">
+                          {formatDate(item.created_at)} · {MODES[item.mode - 1]?.name ?? "Session"}
+                          {item.ragas_score !== null && <> · RAGAS {item.ragas_score.toFixed(2)}</>}
+                          {item.overall_confidence !== null && <> · confidence {item.overall_confidence}</>}
+                          {item.cost_usd > 0 && <> · {formatCost(item.cost_usd)}</>}
+                        </div>
+                      </button>
+                      <span className={`status-pill ${statusClass}`}>{item.status.replace(/_/g, " ")}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
         </div>
       </div>

@@ -3,31 +3,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Script from "next/script";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface TopPaper {
-  title: string;
-  relevance_score: number;
-  summary: string;
-}
-
-interface EvaluationJson {
-  novelty_score: number;
-  feasibility_score: number;
-  research_gap_score: number;
-  overall_confidence: number;
-  ragas_score: number;
-  low_confidence_flag: boolean;
-  refined_hypothesis: string;
-  strengths: string[];
-  weaknesses: string[];
-  chaos_constraint: string;
-  chaos_response_summary: string;
-  proposed_methodology: string[];
-  top_papers: TopPaper[];
-  references: string[];
-}
+import {
+  apiJson, apiUrl, formatCost, formatDate, withDefaults,
+  type ClaimAuditRecord, type EvaluationJson, type SessionResult, type Transcript,
+} from "@/lib/api";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -47,11 +26,6 @@ function flowLabel(stepText: string): string {
   return (words[0] ?? "") + (words[1] ? "\n" + words[1] : "");
 }
 
-/** Format today's date as "D Month YYYY". */
-function todayLabel(): string {
-  return new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-}
-
 const FLOW_COLORS = ["#B8935A", "#9A7D4A", "#3A7D5C", "#2C3E6B", "#7A5C8A"];
 const BAR_COLOR_STOPS = [
   ["#B8935A", "#D4B07A"],
@@ -61,6 +35,18 @@ const BAR_COLOR_STOPS = [
   ["#C0503A", "#E0705A"],
 ];
 
+const VERDICT_TEXT: Record<string, string> = {
+  supported: "Supported",
+  partial: "Partial",
+  unsupported: "Unsupported",
+  contradicted: "Contradicted",
+};
+
+function roundLabel(r: { agent: string; round: number; stage?: string; attempt?: number }): string {
+  if (r.stage === "repair") return `Repair ${r.attempt ?? ""} — Innovator`.replace("  ", " ");
+  return `Round ${r.round} — ${r.agent}`;
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function ReportPage() {
@@ -68,9 +54,14 @@ export default function ReportPage() {
   const sessionId = params.session_id;
 
   const [evalJson, setEvalJson] = useState<EvaluationJson | null>(null);
+  const [meta, setMeta] = useState<SessionResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const [echartsReady, setEchartsReady] = useState(false);
+  const [transcript, setTranscript] = useState<Transcript | null>(null);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
 
   // Chart container refs
   const radarRef = useRef<HTMLDivElement>(null);
@@ -84,29 +75,45 @@ export default function ReportPage() {
   // Stable refs to chart instances for resize / dispose
   const chartInstances = useRef<unknown[]>([]);
 
-  // ── Fetch data ─────────────────────────────────────────────────────────────
+  // ── Fetch data (polls while the debate is still running) ───────────────────
 
   useEffect(() => {
     if (!sessionId) return;
-    (async () => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const load = async () => {
       try {
-        const res = await fetch(`http://localhost:8000/api/session/${sessionId}/result`);
+        const res = await fetch(apiUrl(`/api/session/${sessionId}/result`));
+        if (cancelled) return;
         if (res.status === 202) {
-          setError("The report is not ready yet. Please wait for the debate to finish.");
+          setPending(true);
+          setLoading(false);
+          timer = setTimeout(load, 3000);
           return;
         }
+        const body = await res.json().catch(() => ({}));
         if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.detail ?? `Request failed (${res.status})`);
+          throw new Error(typeof body.detail === "string" ? body.detail : `Request failed (${res.status})`);
         }
-        const data = await res.json();
-        setEvalJson(data.evaluation_json);
+        setPending(false);
+        setMeta(body as SessionResult);
+        setEvalJson(withDefaults((body as SessionResult).evaluation_json));
+        setLoading(false);
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to load report.");
-      } finally {
+        if (cancelled) return;
+        const message = err instanceof TypeError
+          ? "Cannot reach the backend. Is uvicorn running?"
+          : err instanceof Error ? err.message : "Failed to load report.";
+        setError(message);
         setLoading(false);
       }
-    })();
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [sessionId]);
 
   // ── Init ECharts ───────────────────────────────────────────────────────────
@@ -217,8 +224,8 @@ export default function ReportPage() {
         grid: { top: 10, bottom: 20, left: 16, right: 60, containLabel: true },
         tooltip: {
           trigger: "axis", axisPointer: { type: "shadow" },
-          formatter: (p: { name: string; value: number }[]) =>
-            `${p[0].name}<br/>Relevance: <b>${p[0].value}</b>`
+          formatter: (p: { dataIndex: number; value: number }[]) =>
+            `${(papers[p[0].dataIndex]?.title ?? "").replace(/[<>&]/g, "")}<br/>Relevance: <b>${p[0].value}</b>`
         },
         xAxis: {
           type: "value", max: 100,
@@ -230,7 +237,7 @@ export default function ReportPage() {
           type: "category",
           data: papers.map(p => {
             // Truncate long titles for the y-axis
-            const t = p.title.replace(/\(.*?\)/g, "").trim();
+            const t = (p.title || "Untitled").replace(/\(.*?\)/g, "").trim();
             return t.length > 28 ? t.slice(0, 26) + "…" : t;
           }),
           axisLabel: { fontSize: 11, color: "#6B6860", fontFamily: "Instrument Sans, sans-serif" },
@@ -239,7 +246,7 @@ export default function ReportPage() {
         series: [{
           type: "bar", barMaxWidth: 20, barBorderRadius: [0, 6, 6, 0],
           data: papers.map((p, i) => ({
-            value: p.relevance_score,
+            value: Math.round(p.relevance_score),
             itemStyle: {
               color: {
                 type: "linear", x: 0, y: 0, x2: 1, y2: 0,
@@ -273,9 +280,15 @@ export default function ReportPage() {
         ? [370]
         : steps.map((_, i) => Math.round(60 + i * (620 / (nodeCount - 1))));
 
+      // Graph nodes need unique names; suffix duplicates with invisible spacing
+      const seen = new Map<string, number>();
       const nodes = steps.map((raw, i) => {
         const { text } = parseStep(raw, i);
-        return { name: flowLabel(text) || `Step ${i + 1}`, x: xPositions[i], y: 110, color: FLOW_COLORS[i] ?? "#B8935A" };
+        let name = flowLabel(text) || `Step ${i + 1}`;
+        const n = seen.get(name) ?? 0;
+        seen.set(name, n + 1);
+        if (n) name = `${name}${"​".repeat(n)}`;
+        return { name, x: xPositions[i], y: 110, color: FLOW_COLORS[i] ?? "#B8935A" };
       });
 
       flow.setOption({
@@ -326,10 +339,26 @@ export default function ReportPage() {
     };
   }, [echartsReady, evalJson, initCharts]);
 
-  // ── Download PDF ───────────────────────────────────────────────────────────
+  // ── Downloads & transcript ─────────────────────────────────────────────────
 
   const handleDownloadPDF = () => {
-    window.location.href = `http://localhost:8000/api/session/${sessionId}/pdf`;
+    window.location.href = apiUrl(`/api/session/${sessionId}/pdf`);
+  };
+
+  const download = (fmt: "markdown" | "bibtex" | "docx") => {
+    window.location.href = apiUrl(`/api/session/${sessionId}/export/${fmt}`);
+  };
+
+  const toggleTranscript = async () => {
+    const next = !transcriptOpen;
+    setTranscriptOpen(next);
+    if (next && !transcript) {
+      try {
+        setTranscript(await apiJson<Transcript>(`/api/session/${sessionId}/transcript`));
+      } catch (err: unknown) {
+        setTranscriptError(err instanceof Error ? err.message : "Could not load the transcript.");
+      }
+    }
   };
 
   // ── Derived display values ─────────────────────────────────────────────────
@@ -340,6 +369,37 @@ export default function ReportPage() {
   const confidenceLabel = isLowConfidence
     ? `⚠ Low Confidence · RAGAS ${ragas.toFixed(2)}`
     : `✓ High Confidence · RAGAS ${ragas.toFixed(2)}`;
+  const repairRounds = Math.max(0, (evalJson?.attempts.length ?? 1) - 1);
+  const paperCount = evalJson ? (evalJson.references_meta.length || evalJson.references.length) : 0;
+  const rationale = evalJson?.score_rationale;
+  const hasRationale = !!rationale && Object.values(rationale).some(Boolean);
+  const auditCounts = (evalJson?.claim_audit ?? []).reduce<Record<string, number>>((acc, r) => {
+    if (!r.resolved) acc[r.verdict] = (acc[r.verdict] ?? 0) + 1;
+    return acc;
+  }, {});
+  const rerunHref = evalJson
+    ? `/?mode=2&input=${encodeURIComponent(evalJson.refined_hypothesis)}&parent=${sessionId}`
+    : "/";
+
+  function rangeText(key: "novelty" | "feasibility" | "research_gap" | "overall"): string | null {
+    if (!evalJson) return null;
+    const [lo, hi] = evalJson.score_ranges[key];
+    if (lo === hi) return evalJson.score_samples > 1 ? `${evalJson.score_samples} reviewers agree` : null;
+    return `range ${lo}–${hi} · ${evalJson.score_samples} reviewers`;
+  }
+
+  function evidenceFor(r: ClaimAuditRecord) {
+    if (!r.paper_title) return <span className="audit-reason">{r.reason || "No retrieved paper addresses this claim."}</span>;
+    return (
+      <>
+        {r.paper_url
+          ? <a href={r.paper_url} target="_blank" rel="noreferrer" className="audit-paper">{r.paper_title}</a>
+          : <span className="audit-paper">{r.paper_title}</span>}
+        {r.quote && <div className="audit-quote">“{r.quote}”</div>}
+        {!r.quote && r.reason && <div className="audit-reason">{r.reason}</div>}
+      </>
+    );
+  }
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -349,10 +409,12 @@ export default function ReportPage() {
       <Script
         src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"
         strategy="afterInteractive"
-        onLoad={() => setEchartsReady(true)}
+        // onReady also fires when the script is already cached (a second report visit in the same tab);
+        // onLoad only fires on the first load, which left the charts blank on later visits.
+        onReady={() => setEchartsReady(true)}
       />
 
-      <style>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
@@ -610,6 +672,86 @@ export default function ReportPage() {
           color: var(--amber); flex-shrink: 0; width: 20px;
         }
 
+
+        .confidence-badge.low {
+          background: var(--red-pale); border-color: rgba(192,80,58,0.3); color: var(--red);
+        }
+
+        .actions-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+        .action-btn {
+          display: inline-flex; align-items: center; gap: 6px;
+          font-family: 'Instrument Sans', sans-serif; font-size: 12px; font-weight: 600;
+          color: var(--ink-muted); background: var(--white); border: 1px solid var(--border);
+          padding: 7px 13px; border-radius: 8px; cursor: pointer; text-decoration: none;
+          transition: all 0.2s ease;
+        }
+        .action-btn:hover { color: var(--amber); border-color: var(--amber-light); background: var(--amber-pale); }
+        .action-btn.primary { color: white; background: var(--amber); border-color: var(--amber); }
+        .action-btn.primary:hover { background: #A07848; color: white; }
+
+        .gauge-range { font-size: 10px; color: var(--ink-faint); margin-top: 2px; }
+
+        .rationale-card {
+          background: var(--white); border: 1px solid var(--border);
+          border-radius: 12px; padding: 16px 20px; margin-top: 16px;
+        }
+        .rationale-row { display: flex; gap: 12px; font-size: 12px; line-height: 1.55; color: var(--ink-muted); margin-bottom: 8px; }
+        .rationale-row:last-child { margin-bottom: 0; }
+        .rationale-key {
+          flex-shrink: 0; width: 96px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+          text-transform: uppercase; color: var(--ink); padding-top: 2px;
+        }
+
+        .audit-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .audit-list { display: flex; flex-direction: column; gap: 8px; }
+        .audit-row {
+          display: grid; grid-template-columns: 104px 1fr; gap: 14px;
+          background: var(--white); border: 1px solid var(--border);
+          border-radius: 10px; padding: 12px 16px;
+        }
+        .audit-row.resolved { opacity: 0.6; }
+        .verdict-badge {
+          align-self: start; justify-self: start;
+          font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+          padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border);
+          background: var(--bg); color: var(--ink-muted); white-space: nowrap;
+        }
+        .verdict-badge.supported { background: var(--green-pale); color: var(--green); border-color: rgba(58,125,92,0.25); }
+        .verdict-badge.partial { background: var(--amber-pale); color: var(--amber); border-color: var(--amber-light); }
+        .verdict-badge.unsupported, .verdict-badge.contradicted { background: var(--red-pale); color: var(--red); border-color: rgba(192,80,58,0.25); }
+        .audit-claim { font-size: 13px; color: var(--ink); line-height: 1.5; }
+        .audit-round { font-size: 10px; font-weight: 700; color: var(--ink-faint); letter-spacing: 0.06em; margin-right: 6px; }
+        .audit-evidence { font-size: 12px; color: var(--ink-muted); margin-top: 6px; line-height: 1.5; }
+        .audit-paper { color: var(--ink); font-weight: 600; text-decoration: none; }
+        a.audit-paper:hover { color: var(--amber); }
+        .audit-quote { font-style: italic; margin-top: 3px; }
+        .audit-reason { font-style: normal; }
+        .audit-resolution { font-size: 11px; font-weight: 600; color: var(--amber); margin-top: 4px; }
+
+        .transcript-toggle { margin-bottom: 12px; }
+        .transcript-round {
+          background: var(--white); border: 1px solid var(--border);
+          border-radius: 10px; padding: 16px 18px; margin-bottom: 8px;
+        }
+        .transcript-head {
+          font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+          color: var(--amber); margin-bottom: 8px;
+        }
+        .transcript-body { font-size: 13px; line-height: 1.65; color: var(--ink-muted); white-space: pre-wrap; }
+        .transcript-claims { margin-top: 10px; padding-left: 18px; font-size: 12px; color: var(--ink-muted); line-height: 1.55; }
+
+        .ref-item a { color: var(--ink-muted); }
+        .ref-item a:hover { color: var(--amber); }
+
+        .section:nth-child(8) { animation-delay: 0.58s; }
+        .section:nth-child(9) { animation-delay: 0.64s; }
+        .section:nth-child(10) { animation-delay: 0.7s; }
+
+        @media (max-width: 700px) {
+          .audit-row { grid-template-columns: 1fr; gap: 6px; }
+          .rationale-row { flex-direction: column; gap: 2px; }
+        }
+
         @keyframes fadeUp { to { opacity: 1; transform: translateY(0); } }
 
         .section:nth-child(1) { animation-delay: 0.15s; }
@@ -626,7 +768,7 @@ export default function ReportPage() {
           .charts-grid, .sw-grid, .gauges-row { grid-template-columns: 1fr; }
           .charts-grid .chart-card.full { grid-column: 1; }
         }
-      `}</style>
+      ` }} />
 
       <div className="dot-grid" />
 
@@ -638,14 +780,14 @@ export default function ReportPage() {
         </div>
         <div className="topbar-right">
           <span className="chip">Session #{sessionChip}</span>
-          <button className="download-btn" onClick={handleDownloadPDF}>
+          <button className="download-btn" onClick={handleDownloadPDF} disabled={!evalJson}>
             ↓ Download PDF
           </button>
         </div>
       </nav>
 
-      {/* Loading / error states — inside page wrapper so layout matches */}
-      {(loading || error) && (
+      {/* Loading / pending / error states — inside page wrapper so layout matches */}
+      {(loading || error || pending) && (
         <main className="page">
           <div className="report-header">
             <div className="report-eyebrow">
@@ -653,14 +795,22 @@ export default function ReportPage() {
               <span className="eyebrow-text">Research Evaluation Report</span>
             </div>
             <p style={{ fontSize: 16, color: "var(--ink-muted)", marginTop: 12 }}>
-              {loading ? "Loading report…" : error}
+              {loading ? "Loading report…"
+                : error ? error
+                : "The debate is still running — this page will update when the report is ready."}
             </p>
+            {(error || pending) && (
+              <div className="actions-row">
+                {pending && <a className="action-btn" href={`/council/${sessionId}`}>Watch the debate →</a>}
+                <a className="action-btn" href="/">← New session</a>
+              </div>
+            )}
           </div>
         </main>
       )}
 
       {/* Full report — only rendered when data is available */}
-      {!loading && !error && evalJson && (
+      {!loading && !error && !pending && evalJson && (
         <main className="page">
 
           {/* Report Header */}
@@ -670,16 +820,27 @@ export default function ReportPage() {
               <span className="eyebrow-text">Research Evaluation Report</span>
             </div>
             <h1 className="report-title">
-              {evalJson.refined_hypothesis}
+              {evalJson.refined_hypothesis || meta?.hypothesis || "Untitled hypothesis"}
             </h1>
             <div className="report-meta">
-              <div className="meta-item">📅 {todayLabel()}</div>
+              <div className="meta-item">📅 {meta?.created_at ? formatDate(meta.created_at) : "—"}</div>
               <div className="meta-dot" />
-              <div className="meta-item">{evalJson.references.length} papers reviewed</div>
+              <div className="meta-item">{paperCount} papers cited</div>
               <div className="meta-dot" />
-              <div className="meta-item">5 debate rounds</div>
+              <div className="meta-item">5 debate rounds{repairRounds ? ` + ${repairRounds} repair` : ""}</div>
+              {evalJson.model && (<><div className="meta-dot" /><div className="meta-item">{evalJson.model}</div></>)}
+              {evalJson.cost_usd > 0 && (<><div className="meta-dot" /><div className="meta-item">{formatCost(evalJson.cost_usd)}</div></>)}
               <div className="meta-dot" />
-              <div className="confidence-badge">{confidenceLabel}</div>
+              <div className={`confidence-badge ${isLowConfidence ? "low" : ""}`}>{confidenceLabel}</div>
+            </div>
+            <div className="actions-row">
+              <a className="action-btn primary" href={rerunHref}>↻ Run again with refined hypothesis</a>
+              {meta?.parent_session_id && (
+                <a className="action-btn" href={`/compare?a=${meta.parent_session_id}&b=${sessionId}`}>⇄ Compare with previous run</a>
+              )}
+              <button className="action-btn" onClick={() => download("markdown")}>↓ Markdown</button>
+              <button className="action-btn" onClick={() => download("docx")}>↓ Word</button>
+              <button className="action-btn" onClick={() => download("bibtex")}>↓ BibTeX</button>
             </div>
           </div>
 
@@ -691,6 +852,11 @@ export default function ReportPage() {
             </div>
             <div className="exec-summary">
               {evalJson.refined_hypothesis}
+              {evalJson.original_hypothesis && evalJson.original_hypothesis !== evalJson.refined_hypothesis && (
+                <div style={{ fontSize: 13, marginTop: 10 }}>
+                  <strong>Original hypothesis:</strong> {evalJson.original_hypothesis}
+                </div>
+              )}
             </div>
           </div>
 
@@ -703,17 +869,18 @@ export default function ReportPage() {
 
             {/* Gauges */}
             <div className="gauges-row" style={{ marginBottom: 16 }}>
-              {[
-                { ref: gauge0Ref, label: "Novelty" },
-                { ref: gauge1Ref, label: "Feasibility" },
-                { ref: gauge2Ref, label: "Research Gap" },
-                { ref: gauge3Ref, label: "Citation Support" },
-              ].map(({ ref, label }) => (
+              {([
+                { ref: gauge0Ref, label: "Novelty", key: "novelty" },
+                { ref: gauge1Ref, label: "Feasibility", key: "feasibility" },
+                { ref: gauge2Ref, label: "Research Gap", key: "research_gap" },
+                { ref: gauge3Ref, label: "Citation Support", key: null },
+              ] as const).map(({ ref, label, key }) => (
                 <div key={label} className="gauge-card">
                   <div ref={ref} style={{ height: 120, width: "100%" }} />
                   <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--ink-faint)", marginTop: 4 }}>
                     {label}
                   </div>
+                  {key && rangeText(key) && <div className="gauge-range">{rangeText(key)}</div>}
                 </div>
               ))}
             </div>
@@ -729,6 +896,23 @@ export default function ReportPage() {
                 <div ref={barRef} className="chart-container" style={{ height: 280 }} />
               </div>
             </div>
+
+            {hasRationale && rationale && (
+              <div className="rationale-card">
+                <div className="chart-label">Why these scores</div>
+                {([
+                  ["Novelty", rationale.novelty],
+                  ["Feasibility", rationale.feasibility],
+                  ["Research gap", rationale.research_gap],
+                  ["Overall", rationale.overall],
+                ] as const).filter(([, text]) => text).map(([label, text]) => (
+                  <div key={label} className="rationale-row">
+                    <span className="rationale-key">{label}</span>
+                    <span>{text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* 3. Strengths & Weaknesses */}
@@ -813,19 +997,99 @@ export default function ReportPage() {
             </div>
           </div>
 
-          {/* 7. References */}
+          {/* 7. Claim Evidence Audit */}
+          {evalJson.claim_audit.length > 0 && (
+            <div className="section">
+              <div className="section-header">
+                <span className="section-num">07</span>
+                <span className="section-title">Claim Evidence Audit</span>
+              </div>
+              <div className="audit-summary">
+                {Object.entries(auditCounts).map(([verdict, count]) => (
+                  <span key={verdict} className={`verdict-badge ${verdict}`}>{count} {VERDICT_TEXT[verdict] ?? verdict}</span>
+                ))}
+                {evalJson.attempts.length > 1 && (
+                  <span className="verdict-badge">
+                    RAGAS by attempt: {evalJson.attempts.map(a => a.ragas_score.toFixed(2)).join(" → ")}
+                  </span>
+                )}
+              </div>
+              <div className="audit-list">
+                {evalJson.claim_audit.map((r, i) => (
+                  <div key={i} className={`audit-row ${r.resolved ? "resolved" : ""}`}>
+                    <span className={`verdict-badge ${r.verdict}`}>{VERDICT_TEXT[r.verdict] ?? r.verdict}</span>
+                    <div>
+                      <div className="audit-claim">
+                        <span className="audit-round">{r.stage === "repair" ? "REPAIR" : `R${r.round}`}</span>
+                        {r.claim}
+                      </div>
+                      <div className="audit-evidence">{evidenceFor(r)}</div>
+                      {r.resolved && (
+                        <div className="audit-resolution">
+                          {r.resolved === "retracted" ? "Retracted by the Innovator in a repair round"
+                            : `Revised to: ${r.revised_to}`}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 8. Debate Transcript */}
           <div className="section">
             <div className="section-header">
-              <span className="section-num">07</span>
+              <span className="section-num">{evalJson.claim_audit.length > 0 ? "08" : "07"}</span>
+              <span className="section-title">Debate Transcript</span>
+            </div>
+            <button className="action-btn transcript-toggle" onClick={toggleTranscript}>
+              {transcriptOpen ? "Hide full transcript ▲" : "Show full transcript ▼"}
+            </button>
+            {transcriptOpen && (
+              <div>
+                {transcriptError && <div className="audit-reason">{transcriptError}</div>}
+                {!transcript && !transcriptError && <div className="audit-reason">Loading transcript…</div>}
+                {transcript?.round_outputs.map((r, i) => (
+                  <div key={i} className="transcript-round">
+                    <div className="transcript-head">{roundLabel(r)}</div>
+                    <div className="transcript-body">{r.content}</div>
+                    {r.claims?.length > 0 && (
+                      <ul className="transcript-claims">
+                        {r.claims.map((c, j) => <li key={j}>{c}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 9. References */}
+          <div className="section">
+            <div className="section-header">
+              <span className="section-num">{evalJson.claim_audit.length > 0 ? "09" : "08"}</span>
               <span className="section-title">Key References</span>
             </div>
             <div className="references-list">
-              {evalJson.references.map((ref, i) => (
-                <div key={i} className="ref-item">
-                  <div className="ref-num">{i + 1}</div>
-                  <div>{ref}</div>
-                </div>
-              ))}
+              {evalJson.references_meta.length > 0
+                ? evalJson.references_meta.map((ref, i) => (
+                  <div key={ref.id || i} className="ref-item">
+                    <div className="ref-num">{i + 1}</div>
+                    <div>
+                      {[ref.authors, ref.year ? `(${ref.year})` : ""].filter(Boolean).join(" ")}
+                      {(ref.authors || ref.year) ? ". " : ""}
+                      {ref.title}.{" "}
+                      {ref.url && <a href={ref.url} target="_blank" rel="noreferrer">{ref.url}</a>}
+                    </div>
+                  </div>
+                ))
+                : evalJson.references.map((ref, i) => (
+                  <div key={i} className="ref-item">
+                    <div className="ref-num">{i + 1}</div>
+                    <div>{ref}</div>
+                  </div>
+                ))}
             </div>
           </div>
 
